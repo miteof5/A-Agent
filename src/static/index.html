@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ActionAgent 对话界面</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #f5f7fa; margin: 0; color: #1f2933;
+  }
+  /* ===== 整体布局：左会话列表 + 右对话区 ===== */
+  .app { display: flex; height: 100vh; }
+
+  /* ---- 左栏：会话列表 ---- */
+  .sidebar {
+    flex: 0 0 264px; min-width: 220px; background: #fff;
+    border-right: 1px solid #e5e7eb; display: flex; flex-direction: column;
+  }
+  .sidebar-head {
+    padding: 14px 14px 10px; border-bottom: 1px solid #f3f4f6;
+  }
+  .sidebar-head h1 { font-size: 16px; margin: 0 0 10px; }
+  .sidebar-head .new-chat {
+    width: 100%; height: 40px; border: none; border-radius: 8px;
+    background: #2563eb; color: #fff; font-size: 14px; font-weight: 600;
+    cursor: pointer;
+  }
+  .sidebar-head .new-chat:hover { background: #1d4ed8; }
+  .sess-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .sess {
+    position: relative;  /* del-btn 定位锚点（S4.4 修复：无此则删除按钮跑到视口右上角） */
+    border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px;
+    cursor: pointer; margin-bottom: 6px; background: #fff;
+  }
+  .sess:hover { background: #f8fafc; }
+  .sess.active { border-color: #2563eb; background: #eff6ff; }
+  .sess .title {
+    font-size: 13px; color: #1f2933; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-all;
+  }
+  .sess .meta { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+  .sess .del-btn {
+    position: absolute; top: 6px; right: 8px; display: none;
+    width: 20px; height: 20px; line-height: 18px; text-align: center;
+    border-radius: 50%; border: none; background: #f1f5f9; color: #64748b;
+    font-size: 12px; cursor: pointer;
+  }
+  .sess:hover .del-btn { display: inline-block; }
+  .sess .del-btn:hover { background: #fee2e2; color: #b91c1c; }
+  .sess .del-btn.confirm { display: inline-block; width: auto; padding: 0 8px; border-radius: 8px; background: #dc2626; color: #fff; font-size: 11px; }
+  .sess .badge {
+    font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .sess .time { font-size: 11px; color: #9ca3af; margin-left: auto; }
+  .sess-empty { color: #9ca3af; font-size: 12px; text-align: center; padding: 20px 0; }
+
+  /* ---- 右栏：对话区 ---- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chat-head {
+    padding: 10px 16px; border-bottom: 1px solid #e5e7eb; background: #fff;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .chat-head .title { font-size: 14px; font-weight: 600; color: #1f2933; }
+  .chat-head .pill {
+    padding: 3px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .chat-head .mode-tag {
+    font-size: 11px; color: #64748b; background: #f1f5f9;
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .chat-head .spacer { flex: 1; }
+  .stop-btn {
+    background: #dc2626; color: #fff; border: none; border-radius: 8px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  .stop-btn:hover { background: #b91c1c; }
+  .stop-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+  .chat-flow {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .chat-empty {
+    color: #9ca3af; font-size: 14px; text-align: center; padding: 60px 20px; line-height: 1.8;
+  }
+
+  /* ---- 对话气泡 / 过程卡 ---- */
+  .msg-user {
+    align-self: flex-end; max-width: 78%; background: #2563eb; color: #fff;
+    border-radius: 12px 12px 4px 12px; padding: 8px 12px;
+    font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  }
+  .msg-agent {
+    align-self: flex-start; max-width: 92%; background: #fff;
+    border: 1px solid #e5e7eb; border-radius: 12px 12px 12px 4px;
+    padding: 8px 12px; font-size: 14px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  /* 每轮过程容器（思考+工具一刀切折叠，S4.5） */
+  .proc-box { align-self: flex-start; width: 92%; }
+  .proc-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; color: #64748b; background: #f1f5f9;
+    border: 1px solid #e2e8f0; border-radius: 999px;
+    padding: 3px 10px; cursor: pointer; user-select: none;
+  }
+  .proc-toggle:hover { background: #e2e8f0; color: #334155; }
+  .proc-toggle .arrow { font-size: 10px; }
+  .proc-body { margin-top: 6px; }
+  .block {
+    align-self: flex-start; width: 92%; border-left: 3px solid #e5e7eb;
+    padding: 6px 10px; background: #f8fafc; border-radius: 4px 8px 8px 4px;
+  }
+  .block .tag { font-size: 12px; font-weight: 700; color: #2563eb; margin-bottom: 3px; }
+  .block .text {
+    font-size: 13px; color: #374151; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .block .args {
+    font-size: 12px; color: #6b7280; margin-top: 2px;
+    font-family: Consolas, monospace; word-break: break-all;
+  }
+  .tool-ok { color: #15803d; }
+  .tool-fail { color: #b91c1c; }
+  .raw-btn {
+    margin-top: 6px; background: #eef2f7; border: none; border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer; color: #475569;
+  }
+  .raw-box {
+    display: none; margin-top: 6px; background: #0f172a; color: #e2e8f0;
+    border-radius: 6px; padding: 8px; font-size: 12px;
+    font-family: Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+    max-height: 200px; overflow-y: auto;
+  }
+
+  /* 审批 / 问答卡 */
+  .approval-card {
+    align-self: flex-start; width: 92%; background: #fffbeb;
+    border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 12px;
+  }
+  .approval-card .q { font-size: 13px; color: #713f12; line-height: 1.6; white-space: pre-wrap; word-break: break-all; margin: 6px 0; }
+  .approval-card .row { display: flex; gap: 8px; }
+  .approve-btn { background: #059669; color: #fff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 13px; cursor: pointer; }
+  .approve-btn:hover { background: #047857; }
+  .approve-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+  .deny-btn { background: #dc2626; color: #fff; border: none; border-radius: 8px; padding: 8px 18px; font-size: 13px; cursor: pointer; }
+  .deny-btn:hover { background: #b91c1c; }
+  .deny-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+  .approval-state { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
+  .ask-card {
+    align-self: flex-start; width: 92%; background: #f8fafc;
+    border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px;
+  }
+  .ask-input {
+    width: 100%; min-height: 48px; resize: vertical; padding: 8px 10px;
+    border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px;
+    font-family: inherit; margin-top: 8px; box-sizing: border-box;
+  }
+  .ask-btn { background: #059669; color: #fff; border: none; border-radius: 8px; padding: 8px 20px; font-size: 13px; cursor: pointer; }
+  .ask-btn:hover { background: #047857; }
+  .ask-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+  /* ---- 底部输入区 ---- */
+  .chat-input {
+    padding: 10px 16px; border-top: 1px solid #e5e7eb; background: #fff;
+    display: flex; gap: 8px; align-items: flex-end;
+  }
+  .chat-input textarea {
+    flex: 1; min-height: 44px; max-height: 120px; resize: vertical;
+    padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px;
+    font-size: 14px; font-family: inherit;
+  }
+  .chat-input textarea:focus { outline: 2px solid #2563eb; border-color: transparent; }
+  .chat-input select {
+    height: 44px; padding: 0 8px; border: 1px solid #d1d5db; border-radius: 8px;
+    font-size: 12px; background: #fff;
+  }
+  .send-btn {
+    height: 44px; padding: 0 22px; border: none; border-radius: 8px;
+    background: #2563eb; color: #fff; font-size: 14px; cursor: pointer;
+  }
+  .send-btn:hover { background: #1d4ed8; }
+  .send-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+  .input-hint { font-size: 11px; color: #9ca3af; }
+
+  /* ---- toast ---- */
+  #toastBox {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 9999; display: flex; flex-direction: column; gap: 8px;
+    max-width: 80vw; pointer-events: none;
+  }
+  .toast {
+    background: #111827; color: #f9fafb; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; line-height: 1.5;
+    box-shadow: 0 4px 12px rgba(0,0,0,.25); pointer-events: auto;
+    max-width: 100%; word-break: break-all;
+  }
+  .toast.warn { background: #92400e; }
+  .toast.error { background: #b91c1c; }
+  .toast.ok { background: #065f46; }
+  .blink { animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0.35; } }
+</style>
+</head>
+<body>
+<div id="toastBox"></div>
+<div class="app">
+  <!-- 左栏：会话列表 -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <h1>🤖 ActionAgent</h1>
+      <button id="newChatBtn" class="new-chat">＋ 新建会话</button>
+    </div>
+    <div class="sess-list" id="sessList">
+      <div class="sess-empty">暂无会话</div>
+    </div>
+  </aside>
+
+  <!-- 右栏：对话区 -->
+  <main class="main">
+    <div class="chat-head">
+      <span class="title" id="chatTitle">新会话</span>
+      <span class="pill" id="statePill" style="background:#f3f4f6;color:#4b5563;">未开始</span>
+      <span class="mode-tag" id="modeTag">read-only</span>
+      <span class="spacer"></span>
+      <button id="stopBtn" class="stop-btn" style="display:none;">■ 停止任务</button>
+    </div>
+    <div class="chat-flow" id="chatFlow">
+      <div class="chat-empty">👋 输入任务开始对话，例如：<br>“读取 README-S1.md 并总结”<br>或 “帮我删除桌面上有关截图的图片”</div>
+    </div>
+    <div class="chat-input">
+      <textarea id="taskInput" placeholder="输入任务，Ctrl+Enter 发送…"></textarea>
+      <select id="modeSelect">
+        <option value="read-only">🛡️ 只读</option>
+        <option value="workspace-write">✏️ 可写</option>
+        <option value="danger-full-access">⚠️ 完全</option>
+      </select>
+      <button id="sendBtn" class="send-btn">发送</button>
+    </div>
+  </main>
+</div>
+
+<script>
+(function(){
+"use strict";
+/* =========================================================
+ * 数据层（API / SSE / 状态）—— 与渲染层分离，换 UI 时整体复用
+ * ========================================================= */
+const api = {
+  async createTask(content, sandboxMode) {
+    const res = await fetch('/api/v1/task/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content, sandbox_mode: sandboxMode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || JSON.stringify(data));
+    return data;
+  },
+  async getStatus(taskId) {
+    const res = await fetch('/api/v1/task/status?task_id=' + encodeURIComponent(taskId));
+    if (!res.ok) return null;
+    return res.json();
+  },
+  async stopTask(taskId) {
+    const res = await fetch('/api/v1/task/stop', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId })
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  },
+  async respond(taskId, answer) {
+    const res = await fetch('/api/v1/task/respond', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId, answer: answer })
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  },
+  async listTasks() {
+    const res = await fetch('/api/v1/tasks?limit=100');
+    if (!res.ok) return { total: 0, tasks: [] };
+    return res.json();
+  },
+  async continueTask(taskId, content) {
+    const res = await fetch('/api/v1/task/' + encodeURIComponent(taskId) + '/continue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  },
+  async deleteTask(taskId) {
+    const res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskId), { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  },
+  async getLogs(taskId) {
+    const res = await fetch('/api/v1/task/logs?task_id=' + encodeURIComponent(taskId) + '&limit=500');
+    if (!res.ok) return { logs: [] };
+    return res.json();
+  }
+};
+
+const stream = {
+  es: null,
+  connect(taskId, { onEvent, onError, replay = true }) {
+    this.close();
+    const es = new EventSource('/api/v1/task/stream?task_id=' + encodeURIComponent(taskId) + '&replay=' + (replay ? 'true' : 'false'));
+    this.es = es;
+    const types = ['status','thought','token','tool_call','tool_result','ask','done','error'];
+    for (const t of types) es.addEventListener(t, (e) => { try { onEvent(e); } catch (err) { showToast('渲染出错：' + err.message, 'error'); } });
+    es.onerror = () => { if (this.es !== es) return; this.close(); onError(); };
+  },
+  close() { if (this.es) { this.es.close(); this.es = null; } }
+};
+
+const state = {
+  curTaskId: null,   // 当前查看/执行的任务
+  curTaskContent: null,
+  curTaskMode: null,
+  sessList: [],
+  pollTimer: null,
+  lastToolBlock: null,     // 最近 tool_call 块（tool_result 追加）
+  lastThoughtBlock: null,  // 最近流式思考块
+  lastThoughtStep: null,   // 思考去重键（旧单步号，保留兼容）
+  lastThoughtKey: null,    // S4.3：turn-step 组合去重键（多轮对话区分轮次）
+  isReplaying: true,        // S4.5：历史重放中（重放默认收起过程块；实时执行自动展开）
+  curState: null,          // 当前会话状态（done 会话可续聊 / executing 拒并发）
+  uiGen: 0                 // UI 代际：reset/openSession/runTask 时 +1，丢弃迟到的轮询/SSE 响应
+};
+
+/* =========================================================
+ * 渲染层（DOM）—— 换 UI 时只重写这部分
+ * ========================================================= */
+const el = {
+  chatFlow: document.getElementById('chatFlow'),
+  chatTitle: document.getElementById('chatTitle'),
+  statePill: document.getElementById('statePill'),
+  modeTag: document.getElementById('modeTag'),
+  stopBtn: document.getElementById('stopBtn'),
+  sendBtn: document.getElementById('sendBtn'),
+  taskInput: document.getElementById('taskInput'),
+  modeSelect: document.getElementById('modeSelect'),
+  sessList: document.getElementById('sessList')
+};
+
+const STATE_BADGE = {
+  pending:   ['⏳ 排队中', '#f3f4f6', '#4b5563'],
+  planning:  ['🧠 规划中', '#f3f4f6', '#4b5563'],
+  executing: ['⚡ 执行中', '#dbeafe', '#1d4ed8'],
+  waiting:   ['❓ 等待回答', '#fef9c3', '#a16207'],
+  paused:    ['⏸ 已停止', '#fef9c3', '#a16207'],
+  interrupted: ['⏹ 已中断', '#f1f5f9', '#64748b'],
+  done:      ['✅ 完成', '#dcfce7', '#15803d'],
+  failed:    ['❌ 失败', '#fee2e2', '#b91c1c'],
+  '未开始':   ['未开始', '#f3f4f6', '#4b5563']
+};
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function showToast(msg, kind) {
+  const box = document.getElementById('toastBox');
+  const t = document.createElement('div');
+  t.className = 'toast' + (kind ? ' ' + kind : '');
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+function setPill(stateName) {
+  // 兜底用中性灰，不用 failed——未知/未开始状态不应误显示为"失败"
+  const b = STATE_BADGE[stateName] || ['未知', '#f3f4f6', '#4b5563'];
+  el.statePill.style.background = b[1];
+  el.statePill.style.color = b[2];
+  el.statePill.textContent = b[0];
+}
+function fmtTime(iso) {
+  if (!iso) return '';
+  const m = String(iso).match(/T(\d{2}):(\d{2})/);
+  return m ? m[1] + ':' + m[2] : iso.slice(5, 16);
+}
+function truncate(s, n) {
+  s = String(s ?? '');
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+/* ---- 会话列表 ---- */
+function renderSessList() {
+  const box = el.sessList;
+  box.innerHTML = '';
+  if (!state.sessList.length) {
+    box.innerHTML = '<div class="sess-empty">暂无会话</div>';
+    return;
+  }
+  let delPending = null; // 两段式确认：第一次点变"确认？"，3s 内再点执行
+  for (const t of state.sessList) {
+    const b = STATE_BADGE[t.state] || ['·', '#f3f4f6', '#4b5563'];
+    const div = document.createElement('div');
+    div.className = 'sess' + (t.task_id === state.curTaskId ? ' active' : '');
+    div.setAttribute('data-id', t.task_id);
+    div.innerHTML =
+      '<div class="title">' + escapeHtml(truncate(t.content, 80)) + '</div>' +
+      '<div class="meta">' +
+        '<span class="badge" style="background:' + b[1] + ';color:' + b[2] + ';">' + b[0] + '</span>' +
+        '<span class="time">' + fmtTime(t.updated_at) + '</span>' +
+      '</div>' +
+      '<button class="del-btn" title="删除会话">✕</button>';
+    const delBtn = div.querySelector('.del-btn');
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation(); // 不触发会话切换
+      if (delPending && delPending.btn === delBtn) {
+        clearTimeout(delPending.timer);
+        delBtn.classList.remove('confirm');
+        delBtn.textContent = '✕';
+        delPending = null;
+        const r = await api.deleteTask(t.task_id);
+        if (!r.ok) { showToast('删除失败：' + (r.data.message || '未知错误'), 'error'); return; }
+        showToast('会话已删除', 'ok');
+        if (state.curTaskId === t.task_id) resetToNewChat();
+        refreshSessList();
+        return;
+      }
+      if (delPending) { delPending.btn.classList.remove('confirm'); delPending.btn.textContent = '✕'; clearTimeout(delPending.timer); }
+      delBtn.classList.add('confirm');
+      delBtn.textContent = '确认？';
+      delPending = { btn: delBtn, timer: setTimeout(() => { delBtn.classList.remove('confirm'); delBtn.textContent = '✕'; delPending = null; }, 3000) };
+    });
+    box.appendChild(div);
+  }
+}
+async function refreshSessList() {
+  const r = await api.listTasks();
+  state.sessList = r.tasks || [];
+  renderSessList();
+}
+function highlightSess(id) {
+  const items = el.sessList.querySelectorAll('.sess');
+  for (const it of items) it.classList.toggle('active', it.getAttribute('data-id') === id);
+}
+
+/* ---- 对话区构建 ---- */
+function addBlock(html, cls) {
+  const div = document.createElement('div');
+  div.className = 'block' + (cls ? ' ' + cls : '');
+  div.innerHTML = html;
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+  return div;
+}
+/* ---- S4.5：每轮过程容器（思考+工具一刀切可折叠） ---- */
+function ensureProcBox(turn) {
+  const t = (turn !== undefined && turn !== null) ? turn : 0;
+  let box = el.chatFlow.querySelector('.proc-box[data-turn="' + t + '"]');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'proc-box';
+    box.setAttribute('data-turn', t);
+    const toggle = document.createElement('div');
+    toggle.className = 'proc-toggle';
+    toggle.innerHTML = '<span class="arrow">▸</span> 思考过程';
+    const body = document.createElement('div');
+    body.className = 'proc-body';
+    body.style.display = 'none';  // 默认收起：折叠后只显示最终回答
+    toggle.addEventListener('click', () => {
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : 'block';
+      toggle.querySelector('.arrow').textContent = open ? '▸' : '▾';
+    });
+    box.appendChild(toggle);
+    box.appendChild(body);
+    el.chatFlow.appendChild(box);
+    scrollBottom();
+  }
+  return box.querySelector('.proc-body');
+}
+function setProcOpen(turn, open) {
+  const box = el.chatFlow.querySelector('.proc-box[data-turn="' + ((turn !== undefined && turn !== null) ? turn : 0) + '"]');
+  if (!box) return;
+  const body = box.querySelector('.proc-body');
+  const arrow = box.querySelector('.arrow');
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent = open ? '▾' : '▸';
+}
+function collapseAllProc() {
+  el.chatFlow.querySelectorAll('.proc-box').forEach(box => {
+    const body = box.querySelector('.proc-body');
+    const arrow = box.querySelector('.arrow');
+    body.style.display = 'none';
+    arrow.textContent = '▸';
+  });
+}
+function addProcBlock(html, cls, turn) {
+  const body = ensureProcBox(turn);
+  const div = document.createElement('div');
+  div.className = 'block' + (cls ? ' ' + cls : '');
+  div.innerHTML = html;
+  body.appendChild(div);
+  scrollBottom();
+  return div;
+}
+function scrollBottom() {
+  el.chatFlow.scrollTop = el.chatFlow.scrollHeight;
+}
+function addUserMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg-user';
+  div.textContent = text;
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+}
+function addAgentResult(text) {
+  const div = document.createElement('div');
+  div.className = 'msg-agent';
+  div.innerHTML = '<b style="color:#2563eb;">Agent</b><br>' + escapeHtml(text || '（无返回内容）');
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+}
+function addAgentError(message) {
+  const div = document.createElement('div');
+  div.className = 'msg-agent';
+  div.innerHTML = '<b style="color:#b91c1c;">任务失败：</b>' + escapeHtml(message || '未知错误');
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+}
+function emptyChat(msg) {
+  el.chatFlow.innerHTML = '<div class="chat-empty">' + msg + '</div>';
+}
+
+/* ---- 工具块 + 日志面板（查看原始输出） ---- */
+function addToolCall(turn, step, name, args) {
+  state.lastToolBlock = addProcBlock(
+    '<div class="tag">🔧 调用工具：' + escapeHtml(name) + '</div>' +
+    '<div class="args">参数：' + escapeHtml(JSON.stringify(args)) + '</div>' +
+    '<div class="text tool-ok">⏳ 执行中…</div>',
+    '', turn
+  );
+  state.lastToolBlock.setAttribute('data-turn', turn);
+  state.lastToolBlock.setAttribute('data-step', step);
+}
+function addToolResult(turn, step, d) {
+  let statusHtml;
+  if (d.is_denied) statusHtml = '<span class="tool-fail">⛔ 被权限拦截</span>';
+  else if (d.ok) statusHtml = '<span class="tool-ok">✓ 执行成功</span>';
+  else statusHtml = '<span class="tool-fail">✗ 执行失败</span>';
+  let html = '<div class="tag">' + statusHtml + '</div>';
+  if (d.content_summary) html += '<div class="text">' + escapeHtml(truncate(d.content_summary, 500)) + '</div>';
+  html += '<button class="raw-btn">查看原始输出 ▾</button><div class="raw-box">加载中…</div>';
+  const blk = (state.lastToolBlock && state.lastToolBlock.getAttribute('data-turn') == turn && state.lastToolBlock.getAttribute('data-step') == step)
+    ? state.lastToolBlock : null;
+  if (blk) {
+    blk.innerHTML = blk.innerHTML.replace('<div class="text tool-ok">⏳ 执行中…</div>', '') + html;
+    const rawBtn = blk.querySelector('.raw-btn');
+    const rawBox = blk.querySelector('.raw-box');
+    rawBtn.addEventListener('click', async () => {
+      if (rawBox.style.display === 'block') { rawBox.style.display = 'none'; rawBtn.textContent = '查看原始输出 ▾'; return; }
+      rawBox.style.display = 'block';
+      rawBtn.textContent = '收起输出 ▴';
+      try {
+        const r = await api.getLogs(state.curTaskId);
+        const hit = (r.logs || []).find((s) => s.turn_index === turn && s.step_index === step && s.tool_result);
+        rawBox.textContent = hit && hit.tool_result
+          ? ('exit_code: ' + (hit.tool_result.metadata && hit.tool_result.metadata.exit_code) + '\n' + (hit.tool_result.content || ''))
+          : '（无原始输出）';
+      } catch (e) { rawBox.textContent = '加载失败：' + e.message; }
+    });
+  } else {
+    addProcBlock(html, '', turn);
+  }
+}
+
+/* ---- 审批卡（S3.5 四态） ---- */
+function addApprovalCard(question) {
+  const div = document.createElement('div');
+  div.className = 'approval-card';
+  div.innerHTML =
+    '<div class="tag" style="color:#d97706;font-weight:700;">⚠️ 需要审批高危操作</div>' +
+    '<div class="q">' + escapeHtml(question) + '</div>' +
+    '<div class="row">' +
+      '<button class="approve-btn">✓ 批准执行</button>' +
+      '<button class="deny-btn">✗ 拒绝</button>' +
+    '</div>';
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+  const ab = div.querySelector('.approve-btn');
+  const db = div.querySelector('.deny-btn');
+  const setState = (st) => {
+    ab.disabled = true; db.disabled = true;
+    if (st === 'approved') {
+      ab.textContent = '✓ 已批准，正在执行…';
+      db.style.display = 'none';
+      div.insertBefore(stateBadge('approved'), div.querySelector('.row'));
+    } else if (st === 'denied') {
+      ab.style.display = 'none';
+      db.textContent = '✗ 已拒绝，已跳过该操作';
+    }
+  };
+  const submit = async (answer) => {
+    ab.disabled = true; db.disabled = true;
+    try {
+      const r = await api.respond(state.curTaskId, answer);
+      if (!r.ok) {
+        showToast('提交失败：' + (r.data.message || '未知错误'), 'error');
+        ab.disabled = false; db.disabled = false;
+        return;
+      }
+      setState(answer === 'approve' ? 'approved' : 'denied');
+      setPill('executing');
+    } catch (e) {
+      showToast('提交失败：' + e.message, 'error');
+      ab.disabled = false; db.disabled = false;
+    }
+  };
+  ab.addEventListener('click', () => submit('approve'));
+  db.addEventListener('click', () => submit('deny'));
+}
+function stateBadge(st) {
+  const span = document.createElement('span');
+  span.className = 'approval-state';
+  if (st === 'approved') { span.style.background = '#dcfce7'; span.style.color = '#15803d'; span.textContent = '✓ 已批准'; }
+  else if (st === 'denied') { span.style.background = '#fee2e2'; span.style.color = '#b91c1c'; span.textContent = '✗ 已拒绝'; }
+  else if (st === 'aborted') { span.style.background = '#f3f4f6'; span.style.color = '#6b7280'; span.textContent = '⏸ 任务已停止'; }
+  return span;
+}
+
+/* ---- 问答卡（S3.3 clarify） ---- */
+function addAskCard(question) {
+  const div = document.createElement('div');
+  div.className = 'ask-card';
+  div.innerHTML =
+    '<div class="tag" style="color:#7c3aed;">❓ Agent 需要你确认</div>' +
+    '<div class="text">' + escapeHtml(question) + '</div>' +
+    '<textarea class="ask-input" placeholder="输入你的回答…"></textarea>' +
+    '<div style="margin-top:8px;"><button class="ask-btn">提交回答</button></div>';
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+  const input = div.querySelector('.ask-input');
+  const btn = div.querySelector('.ask-btn');
+  input.focus();
+  const submit = async () => {
+    const answer = input.value.trim();
+    if (!answer) { showToast('回答不能为空', 'warn'); return; }
+    btn.disabled = true; btn.textContent = '提交中…';
+    try {
+      const r = await api.respond(state.curTaskId, answer);
+      if (!r.ok) {
+        showToast('提交失败：' + (r.data.message || '未知错误'), 'error');
+        btn.disabled = false; btn.textContent = '提交回答';
+        return;
+      }
+      input.disabled = true;
+      btn.textContent = '✓ 已提交，Agent 继续执行…';
+      setPill('executing');
+    } catch (e) {
+      showToast('提交失败：' + e.message, 'error');
+      btn.disabled = false; btn.textContent = '提交回答';
+    }
+  };
+  btn.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit(); });
+}
+
+/* ---- SSE 事件 → 渲染（数据层与渲染层之间的桥） ---- */
+function onEvent(ev) {
+  const d = ev.data ? JSON.parse(ev.data) : {};
+  switch (ev.type) {
+    case 'status':
+      setPill(d.state);
+      if (d.state === 'paused') onFinished('stopped');
+      else if (d.state === 'interrupted') onFinished('interrupted');
+      break;
+    case 'thought': {
+      const key = (d.turn !== undefined ? d.turn : 0) + '-' + d.step;
+      if (state.lastThoughtBlock && state.lastThoughtKey === key) {
+        const t = state.lastThoughtBlock.querySelector('.text');
+        if (t) t.textContent = d.text;
+        state.lastThoughtKey = null;
+      } else {
+        state.lastThoughtBlock = addProcBlock(
+          '<div class="tag">💭 思考（第 ' + (d.step + 1) + ' 步）</div>' +
+          '<div class="text">' + escapeHtml(d.text) + '</div>',
+          '', d.turn
+        );
+        state.lastThoughtKey = key;
+      }
+      if (!state.isReplaying) setProcOpen(d.turn, true);  // 实时执行：当前轮自动展开
+      break;
+    }
+    case 'token': {
+      const key = (d.turn !== undefined ? d.turn : 0) + '-' + d.step;
+      const textEl = (state.lastThoughtBlock && state.lastThoughtKey === key)
+        ? state.lastThoughtBlock.querySelector('.text') : null;
+      if (textEl) {
+        textEl.textContent += d.delta;
+      } else {
+        state.lastThoughtKey = key;
+        state.lastThoughtBlock = addProcBlock(
+          '<div class="tag">💭 思考（第 ' + (d.step + 1) + ' 步）</div>' +
+          '<div class="text">' + escapeHtml(d.delta) + '</div>',
+          '', d.turn
+        );
+      }
+      if (!state.isReplaying) setProcOpen(d.turn, true);
+      scrollBottom();
+      break;
+    }
+    case 'tool_call':
+      addToolCall(d.turn, d.step, d.name, d.arguments);
+      if (!state.isReplaying) setProcOpen(d.turn, true);
+      break;
+    case 'tool_result':
+      addToolResult(d.turn, d.step, d);
+      break;
+    case 'ask':
+      if (d.type === 'approval') addApprovalCard(d.question);
+      else addAskCard(d.question);
+      break;
+    case 'done':
+      addAgentResult(d.result);
+      onFinished('done');
+      break;
+    case 'error':
+      addAgentError(d.message);
+      onFinished('error');
+      break;
+  }
+}
+
+/* ---- 任务结束收尾 / 状态轮询（真相层） ---- */
+function addInterruptNotice() {
+  if (el.chatFlow.querySelector('.interrupt-notice')) return; // 轮询与 SSE 双触发去重
+  const div = document.createElement('div');
+  div.className = 'block interrupt-notice';
+  div.innerHTML = '<div class="tag" style="color:#64748b;">⏹ 任务因服务重启中断</div>' +
+    '<div class="text">上次执行到此为止（线程已随服务消失），完整过程已保留；如需继续可重发任务。</div>';
+  el.chatFlow.appendChild(div);
+  scrollBottom();
+}
+
+function onFinished(flag) {
+  stopPolling();
+  stream.close();
+  state.isReplaying = false;
+  collapseAllProc();  // S4.5：任务完成/停止 → 过程块全部收起，只留最终回答
+  el.stopBtn.style.display = 'none';
+  el.sendBtn.disabled = false;
+  el.sendBtn.textContent = '发送';
+  if (flag === 'done') { setPill('done'); state.curState = 'done'; }
+  else if (flag === 'error') { setPill('failed'); state.curState = 'failed'; }
+  else if (flag === 'interrupted') { addInterruptNotice(); state.curState = 'interrupted'; }
+  // flag === 'stopped'：pill 保持 paused
+  if (flag === 'stopped') {
+    const cards = el.chatFlow.querySelectorAll('.approval-card');
+    for (const c of cards) {
+      const ab = c.querySelector('.approve-btn'), db = c.querySelector('.deny-btn');
+      if (ab && !ab.disabled) { ab.disabled = true; ab.textContent = '⏸ 任务已停止'; if (db) db.style.display = 'none'; }
+    }
+  }
+  refreshSessList();
+}
+async function syncStatus() {
+  if (!state.curTaskId) return;
+  const gen = state.uiGen;
+  const d = await api.getStatus(state.curTaskId);
+  if (gen !== state.uiGen) return; // 过期响应：期间已切换会话/新建会话，丢弃
+  if (!d || !d.state) return;
+  setPill(d.state);
+  if (d.state === 'paused') onFinished('stopped');
+  else if (d.state === 'interrupted') onFinished('interrupted');
+  else if (d.state === 'done') onFinished('done');
+  else if (d.state === 'failed') onFinished('error');
+}
+function startPolling() {
+  stopPolling();
+  state.pollTimer = setInterval(syncStatus, 1500);
+}
+function stopPolling() {
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+}
+
+/* ---- 切换会话（历史重放 + 可继续） ---- */
+async function openSession(taskId, content, sandboxMode, stateName) {
+  state.uiGen++;
+  state.curTaskId = taskId;
+  state.curTaskContent = content;
+  state.curTaskMode = sandboxMode || 'read-only';
+  state.curState = stateName || null;
+  el.chatTitle.textContent = truncate(content, 40);
+  el.modeTag.textContent = state.curTaskMode;
+  el.modeSelect.value = state.curTaskMode;
+  highlightSess(taskId);
+  emptyChat('加载会话历史…');
+  setPill('pending');
+  el.sendBtn.disabled = true;
+  el.stopBtn.style.display = '';
+  el.stopBtn.disabled = false;
+  startPolling();
+  state.isReplaying = true;  // S4.5：历史重放默认收起过程块
+  // 连接 stream：自动重放历史（thought/tool_call/tool_result）→ 终态或实时
+  stream.connect(taskId, {
+    onEvent: onEvent,
+    onError: () => {
+      if (state.curTaskId !== taskId) return;
+      showToast('实时连接断开，已切换为状态轮询（历史不会丢）', 'warn');
+      syncStatus();
+    }
+  });
+}
+
+/* ---- 发起任务（新会话） ---- */
+async function runTask() {
+  const content = el.taskInput.value.trim();
+  if (!content) { showToast('请先输入任务内容', 'warn'); return; }
+
+  // S4.3：当前会话运行中 → 拒绝并发发送（等完成/停止后再发）；输入内容保留在框内
+  if (state.curTaskId && ['executing', 'planning', 'waiting'].includes(state.curState)) {
+    showToast('当前会话正在执行中，请等待完成或停止后再发送', 'warn');
+    return;
+  }
+  // S4.3：已结束的会话 → 同会话续聊（多轮对话），不新建会话
+  el.taskInput.value = '';  // 发送后清空输入框（对话式交互惯例，内容已在对话流中展示）
+  if (state.curTaskId && ['done', 'failed', 'paused', 'interrupted'].includes(state.curState)) {
+    return continueChat(state.curTaskId, content);
+  }
+
+  state.uiGen++;
+  stream.close();
+  stopPolling();
+  state.isReplaying = false;  // S4.5：新任务实时执行，过程块自动展开
+  el.sendBtn.disabled = true;
+  el.sendBtn.textContent = '执行中…';
+  const mode = el.modeSelect.value;
+
+  // 立即在会话列表顶部插入"执行中"占位（真实 task_id 返回后替换）
+  emptyChat('正在提交任务…');
+  setPill('pending');
+  try {
+    const data = await api.createTask(content, mode);
+    state.curTaskId = data.task_id;
+    state.curTaskContent = content;
+    state.curTaskMode = data.sandbox_mode || mode;
+    state.curState = 'executing';
+    el.chatTitle.textContent = truncate(content, 40);
+    el.modeTag.textContent = state.curTaskMode;
+    el.modeSelect.value = state.curTaskMode;
+    el.stopBtn.style.display = '';
+    el.stopBtn.disabled = false;
+    emptyChat('正在执行…');
+    addUserMsg(content);
+    setPill(data.state || 'pending');
+    startPolling();
+    stream.connect(data.task_id, {
+      onEvent: onEvent,
+      onError: () => {
+        showToast('实时连接断开，已切换为状态轮询（界面不会卡住）', 'warn');
+        syncStatus();
+      }
+    });
+    refreshSessList();
+  } catch (e) {
+    setPill('failed');
+    addAgentError('任务提交失败：' + e.message);
+    onFinished('error');
+  }
+}
+
+/* ---- S4.3：同会话续聊（多轮对话） ----
+   保留已有历史 → 追加本轮 user 气泡 → replay=false 订阅实时（不重复渲染历史） */
+async function continueChat(taskId, content) {
+  setPill('pending');
+  state.isReplaying = false;  // S4.5：续聊实时执行
+  el.sendBtn.disabled = true;
+  el.sendBtn.textContent = '执行中…';
+  el.stopBtn.style.display = '';
+  el.stopBtn.disabled = false;
+  try {
+    const r = await api.continueTask(taskId, content);
+    if (!r.ok) throw new Error(r.data.message || ('HTTP ' + r.status));
+    state.curTaskId = r.data.task_id;
+    state.curTaskContent = content;
+    state.curState = 'executing';
+    el.chatTitle.textContent = truncate(content, 40);
+    addUserMsg(content);
+    startPolling();
+    stream.connect(taskId, {
+      onEvent: onEvent,
+      onError: () => {
+        showToast('实时连接断开，已切换为状态轮询（界面不会卡住）', 'warn');
+        syncStatus();
+      },
+      replay: false
+    });
+    refreshSessList();
+  } catch (e) {
+    setPill('failed');
+    addAgentError('续聊失败：' + e.message);
+    onFinished('error');
+  }
+}
+
+/* ---- 停止 ---- */
+async function stopTask() {
+  if (!state.curTaskId) return;
+  el.stopBtn.disabled = true;
+  el.stopBtn.textContent = '正在停止…';
+  try {
+    const r = await api.stopTask(state.curTaskId);
+    if (r.ok) {
+      await syncStatus();
+    } else {
+      await syncStatus();
+      if (r.status === 409) showToast('任务已结束（' + (r.data.code || '已停止') + '），无需停止', 'warn');
+      else { showToast('停止失败：' + (r.data.message || '未知错误'), 'error'); el.stopBtn.disabled = false; el.stopBtn.textContent = '■ 停止任务'; }
+    }
+  } catch (e) {
+    showToast('停止请求失败：' + e.message, 'error');
+    el.stopBtn.disabled = false;
+    el.stopBtn.textContent = '■ 停止任务';
+  }
+}
+
+/* ---- 事件绑定 ---- */
+function resetToNewChat() {
+  state.uiGen++;
+  stream.close();
+  stopPolling();
+  state.curTaskId = null;
+  state.lastToolBlock = state.lastThoughtBlock = null;
+  state.lastThoughtStep = null;
+  el.chatTitle.textContent = '新会话';
+  setPill('未开始');
+  el.modeTag.textContent = '—';
+  el.modeSelect.value = 'read-only';
+  el.stopBtn.style.display = 'none';
+  el.sendBtn.disabled = false;
+  el.sendBtn.textContent = '发送';
+  highlightSess(null);
+  emptyChat('👋 输入任务开始对话，例如：<br>“读取 README-S1.md 并总结”<br>或 “帮我删除桌面上有关截图的图片”');
+}
+document.getElementById('newChatBtn').addEventListener('click', resetToNewChat);
+el.sendBtn.addEventListener('click', runTask);
+el.taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask(); });
+el.stopBtn.addEventListener('click', stopTask);
+el.sessList.addEventListener('click', (e) => {
+  const item = e.target.closest('.sess');
+  if (!item) return;
+  const id = item.getAttribute('data-id');
+  const t = state.sessList.find((x) => x.task_id === id);
+  if (t) openSession(t.task_id, t.content, t.sandbox_mode, t.state);
+});
+
+/* ---- 启动：加载会话列表，自动打开最近会话（豆包式体验：上次会话还在，可直接续聊） ---- */
+refreshSessList();
+(async () => {
+  try {
+    const r = await api.listTasks(1);
+    const t = (r.tasks || [])[0];
+    if (t) openSession(t.task_id, t.content, t.sandbox_mode, t.state);
+  } catch (e) { /* 列表为空或失败时保持新会话 */ }
+})();
+})();
+</script>
+</body>
+</html>

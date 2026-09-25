@@ -1,0 +1,18 @@
+# 隐私与运行数据（绝不提交）
+actionagent.db
+logs/
+*.db-journal
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 环境与密钥
+.env
+.env.local
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
