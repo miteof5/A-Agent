@@ -187,14 +187,21 @@ class Reactor:
                         messages,
                         tool_specs,
                         on_delta=lambda d: emit(
-                            "agent/token", {"turn": 0, "step": step, "delta": d}
+                            "agent/token", {"turn": start_turn, "step": step, "delta": d}
                         ),
+                        should_stop=is_aborted,  # 2026-09-26：用户停止 → 流式中断（不再继续输出）
                     )
                 else:
                     call = self.llm.chat(messages, tool_specs)
             except Exception as e:
                 self._fail(task_id, f"LLM 调用失败: {e}")
                 emit("agent/error", {"message": f"LLM 调用失败: {e}", "recoverable": False})
+                return None
+
+            # 2026-09-26：LLM 返回后立即中断检查——停止立即生效，不执行后续工具
+            if is_aborted():
+                self.storage.update_task(task_id, state=TaskState.PAUSED, step=step)
+                emit("agent/status", {"state": "paused", "turn": start_turn, "step": step})
                 return None
 
             if call.text:

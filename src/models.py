@@ -96,7 +96,7 @@ class Task:
     updated_at: str = field(default_factory=now_iso)
     error: str | None = None
     result: str | None = None
-    sandbox_mode: str = "read-only"  # 契约 §3.1：read-only / workspace-write / danger-full-access
+    sandbox_mode: str = "on-demand"  # 契约 §3.1：on-demand（按需确认）/ full-access（全部允许）
 
     def to_dict(self) -> dict:
         return {

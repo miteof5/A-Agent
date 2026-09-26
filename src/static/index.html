@@ -224,7 +224,7 @@
     <div class="chat-head">
       <span class="title" id="chatTitle">新会话</span>
       <span class="pill" id="statePill" style="background:#f3f4f6;color:#4b5563;">未开始</span>
-      <span class="mode-tag" id="modeTag">read-only</span>
+      <span class="mode-tag" id="modeTag">on-demand</span>
       <span class="spacer"></span>
       <button id="stopBtn" class="stop-btn" style="display:none;">■ 停止任务</button>
     </div>
@@ -234,9 +234,8 @@
     <div class="chat-input">
       <textarea id="taskInput" placeholder="输入任务，Ctrl+Enter 发送…"></textarea>
       <select id="modeSelect">
-        <option value="read-only">🛡️ 只读</option>
-        <option value="workspace-write">✏️ 可写</option>
-        <option value="danger-full-access">⚠️ 完全</option>
+        <option value="on-demand">🔍 按需确认</option>
+        <option value="full-access">⚡ 全部允许</option>
       </select>
       <button id="sendBtn" class="send-btn">发送</button>
     </div>
@@ -249,6 +248,13 @@
 /* =========================================================
  * 数据层（API / SSE / 状态）—— 与渲染层分离，换 UI 时整体复用
  * ========================================================= */
+/* 权限模式（两档，豆包式）：按需确认 / 全部允许；兼容历史三档值 */
+const MODE_LABELS = { 'on-demand': '🔍 按需确认', 'full-access': '⚡ 全部允许' };
+const MODE_OLD_ALIAS = { 'read-only': 'on-demand', 'workspace-write': 'on-demand', 'danger-full-access': 'full-access' };
+function normMode(m) {
+  const n = (m && MODE_OLD_ALIAS[m]) || m || '';
+  return MODE_LABELS[n] ? n : 'on-demand';
+}
 const api = {
   async createTask(content, sandboxMode) {
     const res = await fetch('/api/v1/task/create', {
@@ -311,7 +317,7 @@ const stream = {
     this.close();
     const es = new EventSource('/api/v1/task/stream?task_id=' + encodeURIComponent(taskId) + '&replay=' + (replay ? 'true' : 'false'));
     this.es = es;
-    const types = ['status','thought','token','tool_call','tool_result','ask','done','error'];
+    const types = ['status','user','thought','token','tool_call','tool_result','ask','done','error'];  // 2026-09-26：+user（重放渲染用户消息）
     for (const t of types) es.addEventListener(t, (e) => { try { onEvent(e); } catch (err) { showToast('渲染出错：' + err.message, 'error'); } });
     es.onerror = () => { if (this.es !== es) return; this.close(); onError(); };
   },
@@ -671,6 +677,11 @@ function onEvent(ev) {
       setPill(d.state);
       if (d.state === 'paused') onFinished('stopped');
       else if (d.state === 'interrupted') onFinished('interrupted');
+      else if (d.state === 'done') onFinished('done');  // 2026-09-26：重放收尾信号（回答已逐轮渲染）
+      break;
+    case 'user':
+      // 2026-09-26：切换会话重放时渲染用户消息（此前 agent/user 不重放导致提问丢失）
+      addUserMsg(d.content);
       break;
     case 'thought': {
       const key = (d.turn !== undefined ? d.turn : 0) + '-' + d.step;
@@ -720,7 +731,7 @@ function onEvent(ev) {
       break;
     case 'done':
       addAgentResult(d.result);
-      onFinished('done');
+      if (!state.isReplaying) onFinished('done');  // 2026-09-26：重放期间只逐轮渲染，收尾由终态 status(done) 负责
       break;
     case 'error':
       addAgentError(d.message);
@@ -744,6 +755,8 @@ function onFinished(flag) {
   stopPolling();
   stream.close();
   state.isReplaying = false;
+  state.lastThoughtBlock = null;   // 2026-09-26：收尾清理流式块引用，防跨轮复用（配合后端 token turn 修复）
+  state.lastThoughtKey = null;
   collapseAllProc();  // S4.5：任务完成/停止 → 过程块全部收起，只留最终回答
   el.stopBtn.style.display = 'none';
   el.sendBtn.disabled = false;
@@ -786,10 +799,10 @@ async function openSession(taskId, content, sandboxMode, stateName) {
   state.uiGen++;
   state.curTaskId = taskId;
   state.curTaskContent = content;
-  state.curTaskMode = sandboxMode || 'read-only';
+  state.curTaskMode = normMode(sandboxMode);
   state.curState = stateName || null;
   el.chatTitle.textContent = truncate(content, 40);
-  el.modeTag.textContent = state.curTaskMode;
+  el.modeTag.textContent = MODE_LABELS[state.curTaskMode] || state.curTaskMode;
   el.modeSelect.value = state.curTaskMode;
   highlightSess(taskId);
   emptyChat('加载会话历史…');
@@ -841,10 +854,10 @@ async function runTask() {
     const data = await api.createTask(content, mode);
     state.curTaskId = data.task_id;
     state.curTaskContent = content;
-    state.curTaskMode = data.sandbox_mode || mode;
+    state.curTaskMode = normMode(data.sandbox_mode || mode);
     state.curState = 'executing';
     el.chatTitle.textContent = truncate(content, 40);
-    el.modeTag.textContent = state.curTaskMode;
+    el.modeTag.textContent = MODE_LABELS[state.curTaskMode] || state.curTaskMode;
     el.modeSelect.value = state.curTaskMode;
     el.stopBtn.style.display = '';
     el.stopBtn.disabled = false;
@@ -891,6 +904,7 @@ async function continueChat(taskId, content) {
         showToast('实时连接断开，已切换为状态轮询（界面不会卡住）', 'warn');
         syncStatus();
       },
+      replay: false,  // 2026-09-26：续聊不重放历史（历史 DOM 已在），否则第一轮思考被重复渲染
       replay: false
     });
     refreshSessList();
@@ -933,7 +947,7 @@ function resetToNewChat() {
   el.chatTitle.textContent = '新会话';
   setPill('未开始');
   el.modeTag.textContent = '—';
-  el.modeSelect.value = 'read-only';
+  el.modeSelect.value = 'on-demand';
   el.stopBtn.style.display = 'none';
   el.sendBtn.disabled = false;
   el.sendBtn.textContent = '发送';

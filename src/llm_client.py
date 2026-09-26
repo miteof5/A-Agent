@@ -85,6 +85,7 @@ class LLMClient:
         messages: list[dict],
         tools: list[dict] | None = None,
         on_delta=None,
+        should_stop=None,
     ) -> LLMCall:
         """流式 chat（S3.1）：逐 token 回调 on_delta(delta_text)，返回完整 LLMCall。
 
@@ -105,7 +106,12 @@ class LLMClient:
         text_parts: list[str] = []
         tc_acc: dict[int, dict] = {}  # index -> {id, name, arguments}
         usage = None
+        aborted = False
         for chunk in stream:
+            # 2026-09-26：用户停止 → 流式中断（丢弃未消费 chunk，close 流防泄漏）
+            if should_stop and should_stop():
+                aborted = True
+                break
             if not chunk.choices:
                 # 流式末尾可能带 usage（部分实现）
                 if getattr(chunk, "usage", None) is not None:
@@ -127,6 +133,13 @@ class LLMClient:
                         acc["name"] = tc.function.name
                     if tc.function.arguments:
                         acc["arguments"] += tc.function.arguments
+        if aborted:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            logger.info("LLM stream aborted（用户停止）model=%s elapsed=%.2fs", self.model, time.monotonic() - t0)
+            return LLMCall(text=None, tool_calls=[])  # 中断：丢弃不完整的 text/tool_calls
         elapsed = time.monotonic() - t0
         tool_calls = []
         for idx in sorted(tc_acc):

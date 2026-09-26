@@ -62,7 +62,7 @@ class CreateTaskRequest(BaseModel):
         description="任务内容（自然语言描述你要 Agent 做的事）",
         examples=["读取 README-S1.md 并总结"],
     )
-    sandbox_mode: Literal["read-only", "workspace-write", "danger-full-access"] = "read-only"
+    sandbox_mode: Literal["on-demand", "full-access"] = "on-demand"  # 两档：按需确认 / 全部允许
 
 
 class StopTaskRequest(BaseModel):
@@ -292,56 +292,69 @@ async def _sse_generator(task_id: str, task, run: TaskRun | None, storage: Stora
     """SSE 生成器：先重放 SQLite 历史，再补终态或订阅实时队列。"""
     # ---- 1. 历史重放（S4.1：优先 events 真相源；旧任务无 events 时降级 steps）----
     # S4.3：replay=False（同会话续聊）跳过——界面已保留历史，重复渲染会错乱
-    events = storage.list_events(task_id) if replay else []
-    if events:
-        for ev in events:
-            p = ev["payload"]
-            if ev["type"] == "agent/thought":
-                yield _sse(None, "thought", {"turn": p.get("turn", 0), "step": p.get("step", 0), "text": p.get("text", ""), "task_id": task_id})
-            elif ev["type"] == "tools/call":
-                yield _sse(None, "tool_call", {"turn": p.get("turn", 0), "step": p.get("step", 0), "name": p.get("name", ""), "arguments": p.get("arguments"), "task_id": task_id})
-            elif ev["type"] == "tools/result":
-                yield _sse(
-                    None,
-                    "tool_result",
-                    {
-                        "turn": p.get("turn", 0),
-                        "step": p.get("step", 0),
-                        "ok": p.get("ok"),
-                        "content_summary": (p.get("content") or "")[:500],
-                        "is_denied": p.get("is_denied", False),
-                        "task_id": task_id,
-                    },
-                )
-            # status/ask/done/error 不重放：终态与 waiting 补发由下方逻辑负责，避免与前端状态机重复
-    else:
-        for s in storage.list_steps(task_id):
-            if s["llm_thought"]:
-                yield _sse(None, "thought", {"turn": s["turn_index"], "step": s["step_index"], "text": s["llm_thought"], "task_id": task_id})
-            if s["tool_name"]:
-                yield _sse(
-                    None,
-                    "tool_call",
-                    {"turn": s["turn_index"], "step": s["step_index"], "name": s["tool_name"], "arguments": s["tool_arguments"], "task_id": task_id},
-                )
-                tr = s["tool_result"] or {}
-                yield _sse(
-                    None,
-                    "tool_result",
-                    {
-                        "turn": s["turn_index"],
-                        "step": s["step_index"],
-                        "ok": tr.get("ok"),
-                        "content_summary": (tr.get("content") or "")[:500],
-                        "is_denied": tr.get("is_denied", False),
-                        "task_id": task_id,
-                    },
-                )
+    # 2026-09-26 修复：原先 if events/else 在 replay=False 时 events=[] 误入 else 的 steps 重放，
+    # 导致续聊仍重放历史（且 steps.turn_index 与 events 轮次不一致），跨轮污染折叠块。
+    replayed_done = False  # 2026-09-26：events 重放是否已含 agent/done（决定终态是否补发 done）
+    if replay:
+        events = storage.list_events(task_id)
+        if events:
+            for ev in events:
+                p = ev["payload"]
+                if ev["type"] == "agent/thought":
+                    yield _sse(None, "thought", {"turn": p.get("turn", 0), "step": p.get("step", 0), "text": p.get("text", ""), "task_id": task_id})
+                elif ev["type"] == "tools/call":
+                    yield _sse(None, "tool_call", {"turn": p.get("turn", 0), "step": p.get("step", 0), "name": p.get("name", ""), "arguments": p.get("arguments"), "task_id": task_id})
+                elif ev["type"] == "tools/result":
+                    yield _sse(
+                        None,
+                        "tool_result",
+                        {
+                            "turn": p.get("turn", 0),
+                            "step": p.get("step", 0),
+                            "ok": p.get("ok"),
+                            "content_summary": (p.get("content") or "")[:500],
+                            "is_denied": p.get("is_denied", False),
+                            "task_id": task_id,
+                        },
+                    )
+                elif ev["type"] == "agent/user":
+                    yield _sse(None, "user", {"turn": p.get("turn", 0), "content": p.get("content", ""), "task_id": task_id})
+                elif ev["type"] == "agent/done":
+                    replayed_done = True
+                    yield _sse(None, "done", {"result": p.get("result", ""), "task_id": task_id})
+                # status/ask/done/error 不重放：终态与 waiting 补发由下方逻辑负责，避免与前端状态机重复
+        else:
+            for s in storage.list_steps(task_id):
+                if s["llm_thought"]:
+                    yield _sse(None, "thought", {"turn": s["turn_index"], "step": s["step_index"], "text": s["llm_thought"], "task_id": task_id})
+                if s["tool_name"]:
+                    yield _sse(
+                        None,
+                        "tool_call",
+                        {"turn": s["turn_index"], "step": s["step_index"], "name": s["tool_name"], "arguments": s["tool_arguments"], "task_id": task_id},
+                    )
+                    tr = s["tool_result"] or {}
+                    yield _sse(
+                        None,
+                        "tool_result",
+                        {
+                            "turn": s["turn_index"],
+                            "step": s["step_index"],
+                            "ok": tr.get("ok"),
+                            "content_summary": (tr.get("content") or "")[:500],
+                            "is_denied": tr.get("is_denied", False),
+                            "task_id": task_id,
+                        },
+                    )
 
     # ---- 2. 任务已结束 → 补发终态事件 ----
     task = storage.get_task(task_id)  # 重读，取最新状态
     if task.state == TaskState.DONE:
-        yield _sse(None, "done", {"result": task.result})
+        # 2026-09-26：重放过 done 则只发 status(done) 作收尾信号（回答已逐轮渲染），否则补 done
+        if replayed_done:
+            yield _sse(None, "status", {"state": "done", "turn": task.turn, "step": task.step})
+        else:
+            yield _sse(None, "done", {"result": task.result})
         return
     if task.state == TaskState.FAILED:
         yield _sse(None, "error", {"message": task.error or "任务失败", "recoverable": False})

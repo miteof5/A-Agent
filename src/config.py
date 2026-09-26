@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_MODEL = "qwen-max"
+DEFAULT_MODEL = "deepseek-v4-flash-0731"
 
 
 @dataclass

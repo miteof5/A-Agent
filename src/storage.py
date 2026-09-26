@@ -44,7 +44,7 @@ class Storage:
                     updated_at TEXT NOT NULL,
                     error      TEXT,
                     result     TEXT,
-                    sandbox_mode TEXT NOT NULL DEFAULT 'read-only'
+                    sandbox_mode TEXT NOT NULL DEFAULT 'on-demand'
                 )
                 """
             )
@@ -52,7 +52,7 @@ class Storage:
             cols = [r[1] for r in self._conn.execute("PRAGMA table_info(tasks)").fetchall()]
             if "sandbox_mode" not in cols:
                 self._conn.execute(
-                    "ALTER TABLE tasks ADD COLUMN sandbox_mode TEXT NOT NULL DEFAULT 'read-only'"
+                    "ALTER TABLE tasks ADD COLUMN sandbox_mode TEXT NOT NULL DEFAULT 'on-demand'"
                 )
             self._conn.execute(
                 """
@@ -96,7 +96,7 @@ class Storage:
 
     # ---------- tasks ----------
 
-    def create_task(self, content: str, sandbox_mode: str = "read-only") -> Task:
+    def create_task(self, content: str, sandbox_mode: str = "on-demand") -> Task:
         task = Task(task_id=new_task_id(), content=content, sandbox_mode=sandbox_mode)
         with self._lock, self._conn:
             self._conn.execute(
@@ -166,7 +166,7 @@ class Storage:
             updated_at=row["updated_at"],
             error=row["error"],
             result=row["result"],
-            sandbox_mode=row["sandbox_mode"] or "read-only",
+            sandbox_mode=row["sandbox_mode"] or "on-demand",
         )
 
     # ---------- steps ----------
@@ -253,10 +253,28 @@ class Storage:
                 (task_id, seq, ev_type, json.dumps(payload, ensure_ascii=False), now_iso()),
             )
 
+    def create_event_next(self, task_id: str, ev_type: str, payload: dict) -> None:
+        """按任务内 MAX(seq)+1 落库——seq 单调不依赖进程内存（服务重启/续聊安全）。"""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM events WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            self._conn.execute(
+                """
+                INSERT INTO events (task_id, seq, type, payload, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (task_id, row["next_seq"], ev_type, json.dumps(payload, ensure_ascii=False), now_iso()),
+            )
+
     def list_events(self, task_id: str) -> list[dict]:
-        """按 seq 顺序返回任务的全部事件（payload 已反序列化）。"""
+        """按 (seq, rowid) 顺序返回任务的全部事件（payload 已反序列化）。
+
+        rowid 为次级排序：历史脏数据（同 seq 重复，服务重启导致）按插入顺序稳定重建。
+        """
         rows = self._execute(
-            "SELECT seq, type, payload FROM events WHERE task_id = ? ORDER BY seq",
+            "SELECT seq, type, payload FROM events WHERE task_id = ? ORDER BY seq, rowid",
             (task_id,),
         ).fetchall()
         return [

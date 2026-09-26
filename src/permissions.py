@@ -1,13 +1,11 @@
-"""权限策略（S2.3：sandbox_mode 三档 + 高危命令识别 + tools/pre-execute bail）。
+"""权限策略（S2.3 → 2026-09-26 改两档，参考豆包权限规则 + 高危命令识别 + tools/pre-execute bail）。
 
-对应 v0.3 权限与审批模块的 MVP 切片：
-- ApprovalOutcome 四态 → MVP 只落两态（allowed / denied），
-  真正的用户审批弹窗（approve/reject、always/once/session/deny）留到 S3 前端交互
+两档权限（豆包式"按需确认 / 全部允许"，替代原三档 read-only/workspace-write/danger-full-access）：
+- on-demand（按需确认，默认）：普通操作自动执行；高危命令弹窗审批（NEEDS_APPROVAL）
+  —— 合并了原 read-only 与 workspace-write：不再有"只读保险箱"，安全性靠危险命令识别 + 审批弹窗
+- full-access（全部允许）：全部放行，不弹窗（对应原 danger-full-access）
+- 历史三档值（read-only/workspace-write/danger-full-access）经 _MODE_ALIAS 归一化为新档位，旧会话兼容
 - 高危操作识别：删除/清空/格式化/系统级命令黑名单（不可逆或影响面大）
-- 三档沙箱（v0.3 操作边界）：
-    read-only          只读：file_view 放行；shell_run 仅允许只读查询命令
-    workspace-write    工作区可写：普通命令放行；危险命令 bail 拦截
-    danger-full-access 完全访问：全部放行
 - MVP 为应用层限制（非内核级沙箱），按命令级判断，路径级判断后续增强
 """
 
@@ -18,14 +16,31 @@ from enum import Enum
 
 
 class SandboxMode(str, Enum):
-    READ_ONLY = "read-only"
-    WORKSPACE_WRITE = "workspace-write"
-    DANGER_FULL = "danger-full-access"
+    ON_DEMAND = "on-demand"      # 按需确认（默认）：普通操作放行，高危操作弹窗审批
+    FULL_ACCESS = "full-access"  # 全部允许：全部放行，不弹窗
+
+
+# 旧三档 → 新两档 归一化（S2.3 历史数据兼容）
+_MODE_ALIAS = {
+    "read-only": SandboxMode.ON_DEMAND,
+    "workspace-write": SandboxMode.ON_DEMAND,
+    "danger-full-access": SandboxMode.FULL_ACCESS,
+}
+
+
+def _normalize_mode(mode: str) -> SandboxMode | None:
+    m = _MODE_ALIAS.get(mode)
+    if m is not None:
+        return m
+    try:
+        return SandboxMode(mode)
+    except ValueError:
+        return None
 
 
 class ApprovalOutcome(str, Enum):
     ALLOWED = "allowed"
-    NEEDS_APPROVAL = "needs_approval"  # S3.5：workspace-write 高危命令需用户审批
+    NEEDS_APPROVAL = "needs_approval"  # S3.5：on-demand 档高危命令需用户审批
     DENIED = "denied"
 
 
@@ -105,23 +120,6 @@ def describe_danger(command: str) -> str:
             return f"{desc}（目标：{target}）" if target else desc
     return "高危操作（未识别类别，请谨慎判断）"
 
-# ---- 只读白名单（read-only 模式允许的 shell 命令）----
-_READONLY_PATTERNS = [
-    r"\bGet-\w+\b",              # Get-ChildItem / Get-Content / Get-Process ...
-    r"\bSelect-\w+\b",           # Select-Object
-    r"\bMeasure-\w+\b",          # Measure-Object
-    r"\bSort-\w+\b", r"\bWhere-Object\b", r"\bFind-\w+\b",
-    r"\bTest-\w+\b",             # Test-Path / Test-Connection
-    r"\bFormat-\w+\b",           # Format-Table / Format-List（注意与 Format-Volume 区分：危险列表优先）
-    r"\bWrite-Output\b", r"\becho\b",
-    r"\bdir\b", r"\bls\b", r"\bcd\b", r"\bpwd\b", r"\bcls\b", r"\bclear\b",
-    r"\bgit\s+(status|log|diff|branch|show|remote|rev-parse)\b",
-    r"\bpython\s+--version\b", r"\bpython\s+-V\b", r"\bpython\s+-c\b",
-    r"\bGet-Location\b", r"\bGet-Date\b", r"\bGet-Help\b", r"\bGet-Command\b",
-]
-
-_READONLY_RE = re.compile("|".join(_READONLY_PATTERNS), re.IGNORECASE)
-
 _STRING_LITERAL_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 
@@ -134,22 +132,18 @@ def _is_dangerous(command: str) -> bool:
     return bool(_DANGEROUS_RE.search(_strip_string_literals(command)))
 
 
-def _is_readonly(command: str) -> bool:
-    return bool(_READONLY_RE.search(_strip_string_literals(command)))
-
+_STRING_LITERAL_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 class PermissionPolicy:
     """按任务的 sandbox_mode 对工具调用做审批。"""
 
     def check(self, sandbox_mode: str, tool_name: str, arguments: dict) -> tuple[ApprovalOutcome, str]:
         """返回 (结果, 原因)。tools/pre-execute bail 拦截点。"""
-        mode = sandbox_mode
-        try:
-            SandboxMode(mode)
-        except ValueError:
-            return ApprovalOutcome.DENIED, f"未知的沙箱模式: {mode}"
+        mode = _normalize_mode(sandbox_mode)
+        if mode is None:
+            return ApprovalOutcome.DENIED, f"未知的沙箱模式: {sandbox_mode}"
 
-        # file_view：纯只读，三档都放行
+        # file_view：纯只读，两档都放行
         if tool_name == "file_view":
             return ApprovalOutcome.ALLOWED, ""
 
@@ -159,24 +153,15 @@ class PermissionPolicy:
             if not command:
                 return ApprovalOutcome.DENIED, "命令为空"
 
-            if mode == SandboxMode.DANGER_FULL.value:
+            if mode == SandboxMode.FULL_ACCESS:
                 return ApprovalOutcome.ALLOWED, ""
 
-            if mode == SandboxMode.READ_ONLY.value:
-                if _is_readonly(command) and not _is_dangerous(command):
-                    return ApprovalOutcome.ALLOWED, ""
-                return (
-                    ApprovalOutcome.DENIED,
-                    f"当前沙箱模式为 read-only，仅允许只读查询命令（如 Get-ChildItem、Test-Path）。"
-                    f"请切换 workspace-write 或 danger-full-access 后重试",
-                )
-
-            # workspace-write：普通命令放行，危险命令需用户审批（S3.5 弹窗；read-only 仍直接拒）
+            # on-demand（按需确认）：普通命令放行，危险命令需用户审批（S3.5 弹窗）
             if _is_dangerous(command):
                 return (
                     ApprovalOutcome.NEEDS_APPROVAL,
                     f"检测到高危命令，需要用户审批：{command[:120]}。"
-                    f"批准后执行，拒绝则跳过；也可切换 danger-full-access 免审批",
+                    f"批准后执行，拒绝则跳过；也可切换全部允许（full-access）免审批",
                 )
             return ApprovalOutcome.ALLOWED, ""
 

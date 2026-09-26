@@ -33,8 +33,6 @@ class EventStorePlugin(BasePlugin):
 
     def __init__(self):
         self._storage = None
-        self._seqs: dict[str, int] = {}  # task_id -> 当前 seq（每任务内递增）
-        self._lock = threading.Lock()
 
     def setup(self, ctx: AgentContext) -> None:
         self._storage = ctx.storage
@@ -46,9 +44,8 @@ class EventStorePlugin(BasePlugin):
             tid = (data or {}).get("task_id")
             if not tid or self._storage is None:
                 return  # 无 task_id 的事件不落库（防御，与 SSERelay 一致）
-            with self._lock:
-                seq = self._seqs.get(tid, 0) + 1
-                self._seqs[tid] = seq
-            self._storage.create_event(tid, seq, ev_type, data)
+            # 2026-09-26 修复：seq 由 DB MAX(seq)+1 生成（原内存 _seqs 服务重启即清零，
+            # 导致续聊事件 seq 与历史冲突 → rebuild 消息乱序 → LLM 400 tool_calls 无响应）
+            self._storage.create_event_next(tid, ev_type, data)
 
         return handler

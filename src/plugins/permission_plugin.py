@@ -3,11 +3,10 @@
 S2.3 里 Reactor 直接调用 PermissionPolicy；S2.4 起权限检查由 EventBus 驱动——
 PermissionPlugin 监听 tools/pre-execute（bail 模式），返回非 None 即拦截（工具不执行）。
 
-S3.5 审批弹窗（四态）：
-- read-only：高危命令直接拒绝（DENIED，不弹窗）
-- workspace-write：高危命令进入审批——发 agent/ask(type=approval) → 复用 S3.3 的
-  human_input 挂起-响应通道阻塞等待用户审批 → 批准则放行执行，拒绝则 DENIED
-- danger-full-access：全部放行
+S3.5 审批弹窗（四态）+ 2026-09-26 两档化（豆包式）：
+- on-demand（按需确认，默认）：普通命令放行；高危命令进入审批——发 agent/ask(type=approval)
+  → 复用 S3.3 的 human_input 挂起-响应通道阻塞等待用户审批 → 批准则放行执行，拒绝则 DENIED
+- full-access（全部允许）：全部放行，不弹窗
 审批四态：waiting（等待审批）/ approved（批准执行）/ denied（拒绝跳过）/ aborted（任务停止）
 """
 
