@@ -203,6 +203,20 @@
   .toast.ok { background: #065f46; }
   .blink { animation: blink 1s infinite; }
   @keyframes blink { 50% { opacity: 0.35; } }
+  /* ---- 模型管理视图（模型切换）---- */
+  .model-view { padding: 28px 24px; max-width: 760px; margin: 0 auto; height: 100vh; box-sizing: border-box; overflow-y: auto; }
+  .model-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .model-head h2 { margin: 0; font-size: 17px; }
+  .model-back { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  .model-back:hover { background: #e5e7eb; }
+  .model-current { font-size: 15px; padding: 12px 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 8px; }
+  .model-current b { color: #1d4ed8; }
+  .model-group { margin: 16px 0 6px; font-size: 13px; color: #6b7280; font-weight: 600; }
+  .model-row { display: inline-flex; align-items: center; margin: 4px; padding: 7px 14px; border: 1px solid #e5e7eb; border-radius: 16px; cursor: pointer; background: #fff; font-size: 13px; }
+  .model-row:hover { border-color: #93c5fd; }
+  .model-row.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+  .model-row.busy { opacity: .55; pointer-events: none; }
+  .model-tip { font-size: 12px; color: #9ca3af; margin-top: 20px; }
 </style>
 </head>
 <body>
@@ -213,6 +227,7 @@
     <div class="sidebar-head">
       <h1>🤖 ActionAgent</h1>
       <button id="newChatBtn" class="new-chat">＋ 新建会话</button>
+      <button id="modelBtn" class="new-chat" style="margin-top:6px;">⚙ 模型</button>
     </div>
     <div class="sess-list" id="sessList">
       <div class="sess-empty">暂无会话</div>
@@ -240,6 +255,17 @@
       <button id="sendBtn" class="send-btn">发送</button>
     </div>
   </main>
+</div>
+
+<!-- 模型管理视图（模型切换；独立视图，避免对话页冗余） -->
+<div id="modelView" class="model-view" style="display:none;">
+  <div class="model-head">
+    <button id="modelBackBtn" class="model-back">← 返回对话</button>
+    <h2>⚙ 模型管理</h2>
+  </div>
+  <div class="model-current" id="modelCurrent">当前模型：加载中…</div>
+  <div class="model-list" id="modelList"></div>
+  <div class="model-tip">点击模型即时切换；切换前自动校验（额度/是否存在），失败自动回滚。清单文件：models.txt（换平台改 base_url/api_key + 重写清单）</div>
 </div>
 
 <script>
@@ -304,6 +330,21 @@ const api = {
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
   },
+  async listModels() {
+    const res = await fetch('/api/v1/models');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || '获取模型清单失败');
+    return data;
+  },
+  async switchModel(name) {
+    const res = await fetch('/api/v1/models/switch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || '切换失败');
+    return data;
+  },
   async getLogs(taskId) {
     const res = await fetch('/api/v1/task/logs?task_id=' + encodeURIComponent(taskId) + '&limit=500');
     if (!res.ok) return { logs: [] };
@@ -351,7 +392,12 @@ const el = {
   sendBtn: document.getElementById('sendBtn'),
   taskInput: document.getElementById('taskInput'),
   modeSelect: document.getElementById('modeSelect'),
-  sessList: document.getElementById('sessList')
+  sessList: document.getElementById('sessList'),
+  modelBtn: document.getElementById('modelBtn'),
+  modelView: document.getElementById('modelView'),
+  modelBackBtn: document.getElementById('modelBackBtn'),
+  modelCurrent: document.getElementById('modelCurrent'),
+  modelList: document.getElementById('modelList')
 };
 
 const STATE_BADGE = {
@@ -376,6 +422,54 @@ function showToast(msg, kind) {
   t.textContent = msg;
   box.appendChild(t);
   setTimeout(() => t.remove(), 3500);
+}
+/* ---- 模型管理视图（模型切换：清单下拉式、点选即时生效、校验失败回滚）---- */
+async function openModelView() {
+  document.querySelector('.app').style.display = 'none';
+  el.modelView.style.display = '';
+  await refreshModels();
+}
+function closeModelView() {
+  el.modelView.style.display = 'none';
+  document.querySelector('.app').style.display = '';
+}
+async function refreshModels() {
+  try {
+    const data = await api.listModels();
+    const cur = data.current;
+    el.modelCurrent.innerHTML = '当前模型：<b>' + escapeHtml(cur) + '</b>';
+    el.modelList.innerHTML = '';
+    for (const g of data.groups) {
+      const h = document.createElement('div');
+      h.className = 'model-group';
+      h.textContent = g.group;
+      el.modelList.appendChild(h);
+      for (const m of g.models) {
+        const b = document.createElement('button');
+        b.className = 'model-row' + (m === cur ? ' active' : '');
+        b.textContent = m;
+        b.addEventListener('click', () => doSwitch(m, b));
+        el.modelList.appendChild(b);
+      }
+    }
+  } catch (err) {
+    el.modelCurrent.textContent = '加载失败：' + err.message;
+  }
+}
+async function doSwitch(name, btn) {
+  if (btn.classList.contains('active') || btn.classList.contains('busy')) return;
+  btn.classList.add('busy');
+  const old = btn.textContent;
+  btn.textContent = '校验中…';
+  try {
+    const r = await api.switchModel(name);
+    showToast('已切换为 ' + r.current, 'ok');
+    await refreshModels();
+  } catch (err) {
+    showToast('切换失败：' + (err.message || '未知错误'), 'error');
+    btn.textContent = old;
+    btn.classList.remove('busy');
+  }
 }
 function setPill(stateName) {
   // 兜底用中性灰，不用 failed——未知/未开始状态不应误显示为"失败"
@@ -955,6 +1049,8 @@ function resetToNewChat() {
   emptyChat('👋 输入任务开始对话，例如：<br>“读取 README-S1.md 并总结”<br>或 “帮我删除桌面上有关截图的图片”');
 }
 document.getElementById('newChatBtn').addEventListener('click', resetToNewChat);
+document.getElementById('modelBtn').addEventListener('click', openModelView);
+document.getElementById('modelBackBtn').addEventListener('click', closeModelView);
 el.sendBtn.addEventListener('click', runTask);
 el.taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask(); });
 el.stopBtn.addEventListener('click', stopTask);

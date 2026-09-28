@@ -53,6 +53,39 @@ class LLMClient:
             self._client = OpenAI(api_key=self.config.llm_api_key, base_url=self.config.llm_base_url)
         return self._client
 
+    # ---- 模型切换（模型名运行时热切换；base_url/key 不变时 client 无需重建）----
+
+    def set_model(self, name: str) -> None:
+        """运行时切换模型名（只改 model；chat/chat_stream 每次请求都会读 self.model）。"""
+        self.model = name
+        logger.info("当前模型已切换 name=%s", name)
+
+    def verify_model(self, name: str) -> tuple[bool, str]:
+        """校验模型可用性：发一个 max_tokens=1 的最小请求试水。
+
+        返回 (ok, reason)。错误分类：403 额度/401 key 无效/404 模型不存在/其他。
+        切换接口先调它，失败即回滚——避免切到不可用模型后所有任务挂掉。
+        """
+        try:
+            client = self._get_client()
+            client.chat.completions.create(
+                model=name,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+            )
+            return True, ""
+        except Exception as e:
+            status = getattr(e, "status_code", None)
+            if status is None:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 403:
+                return False, f"额度不足或未开通（403）：{name}"
+            if status == 401:
+                return False, "API Key 无效（401）"
+            if status == 404:
+                return False, f"模型不存在（404）：{name}"
+            return False, f"校验失败：{e}"
+
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMCall:
         client = self._get_client()
         t0 = time.monotonic()

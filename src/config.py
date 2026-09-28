@@ -3,21 +3,30 @@
 约定环境变量前缀 AA_（ActionAgent）：
     AA_LLM_API_KEY    API Key（可选；未设置时回退读系统环境变量 DASHSCOPE_API_KEY）
     AA_LLM_BASE_URL   OpenAI 兼容接口地址（默认阿里云百炼 DashScope 兼容模式）
-    AA_LLM_MODEL      模型名（默认 qwen-max，按你的服务商修改）
+    AA_LLM_MODEL      模型名（显式设置时优先；未设置时按下方优先级取）
     AA_MAX_STEPS      单任务最大 step 数（v0.3 硬上限，默认 50）
     AA_TOOL_MAX_BYTES 工具输出上限（v0.3：64KB 内存有界，默认 65536）
     AA_REPEAT_SOFT_LIMIT  RepeatGuard 温和纠偏阈值（S5.1：同工具同参数/同结果连续 N 次触发，默认 3）
     AA_REPEAT_HARD_LIMIT  RepeatGuard 强硬终止阈值（S5.1：纠偏后仍重复 N 次即终止，默认 3）
+    AA_MODELS_FILE    模型清单文件（默认 models.txt；换平台重写此文件即可）
     AA_DB_PATH        SQLite 文件路径（默认项目根目录 actionagent.db）
+
+模型生效优先级（模型切换功能）：
+    显式 AA_LLM_MODEL > 上次切换持久化（.current_model，随 db 目录）> DEFAULT_MODEL（下方代码常量，可直接改）> models.txt 清单第一个
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from .model_registry import first_model, load_current_model, load_models
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 默认模型（用户可直接改这里，或改用环境变量 AA_LLM_MODEL 覆盖）
 DEFAULT_MODEL = "deepseek-v4-flash-0731"
+DEFAULT_MODELS_FILE = "models.txt"
 
 
 @dataclass
@@ -30,19 +39,33 @@ class Config:
     tool_output_max_bytes: int = 65536
     repeat_soft_limit: int = 3  # S5.1：RepeatGuard 温和纠偏阈值
     repeat_hard_limit: int = 3  # S5.1：RepeatGuard 强硬终止阈值
+    models_file: str = DEFAULT_MODELS_FILE  # 模型切换：可用模型清单文件
     db_path: str = "actionagent.db"
 
 
 def load_config() -> Config:
     api_key = os.getenv("AA_LLM_API_KEY", "") or os.getenv("DASHSCOPE_API_KEY", "")
+    db_path = os.getenv("AA_DB_PATH", "actionagent.db")
+    models_file = os.getenv("AA_MODELS_FILE", DEFAULT_MODELS_FILE)
+
+    # 模型生效优先级：显式环境变量 > 上次切换持久化 > 代码默认值 > 清单第一个
+    model = os.getenv("AA_LLM_MODEL", "").strip()
+    if not model:
+        model = load_current_model(base_dir=Path(db_path).parent) or ""
+    if not model:
+        model = DEFAULT_MODEL
+    if not model:
+        model = first_model(load_models(models_file)) or ""
+
     return Config(
         llm_api_key=api_key,
         llm_base_url=os.getenv("AA_LLM_BASE_URL", DEFAULT_BASE_URL),
-        llm_model=os.getenv("AA_LLM_MODEL", DEFAULT_MODEL),
+        llm_model=model,
         max_steps_per_turn=int(os.getenv("AA_MAX_STEPS", "50")),
         max_llm_calls_per_session=int(os.getenv("AA_MAX_LLM_CALLS", "200")),
         tool_output_max_bytes=int(os.getenv("AA_TOOL_MAX_BYTES", "65536")),
         repeat_soft_limit=int(os.getenv("AA_REPEAT_SOFT_LIMIT", "3")),
         repeat_hard_limit=int(os.getenv("AA_REPEAT_HARD_LIMIT", "3")),
-        db_path=os.getenv("AA_DB_PATH", "actionagent.db"),
+        models_file=models_file,
+        db_path=db_path,
     )

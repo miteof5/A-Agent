@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from .config import Config, load_config
 from .kernel.plugin import AgentContext
 from .llm_client import LLMClient
+from .model_registry import flatten, load_models, save_current_model
 from .models import TaskState
 from .permissions import PermissionPolicy
 from .plugins.permission_plugin import PermissionPlugin
@@ -78,6 +79,11 @@ class RespondTaskRequest(BaseModel):
     task_id: str = Field(..., description="任务 ID")
     answer: str = Field(..., min_length=1, max_length=2000, description="用户回答内容")
 
+class SwitchModelRequest(BaseModel):
+    """POST /models/switch 请求体（模型切换）：切换到清单中的模型。"""
+
+    name: str = Field(..., min_length=1, max_length=100, description="目标模型名（须在 models.txt 清单中）")
+
 
 def _sse(event_id: int | None, event_type: str, data: dict) -> str:
     """SSE 消息格式（契约 §3.5）。
@@ -97,6 +103,7 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
     Reactor 从 ctx 取工具、通过 EventBus 发事件，不再直接依赖横切模块。
     """
     config = config or load_config()
+    models_groups = load_models(config.models_file)  # 模型切换：可用模型清单（models.txt）
     storage = Storage(config.db_path)
     # S4.2：启动扫描残留任务（服务重启/崩溃后 executing/waiting/planning → interrupted，防假死）
     n = storage.mark_interrupted()
@@ -284,6 +291,29 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
+
+    # ---- 模型切换（模型清单 / 运行时切换；校验失败自动回滚 + 持久化）----
+    @app.get("/api/v1/models")
+    def list_models():
+        """返回当前模型 + 可用模型分组清单（models.txt，按厂商分组，多模态在最后）。"""
+        return {
+            "current": llm.model,
+            "groups": [{"group": g.group, "models": g.models} for g in models_groups],
+        }
+
+    @app.post("/api/v1/models/switch")
+    def switch_model(payload: SwitchModelRequest):
+        name = payload.name.strip()
+        if name not in flatten(models_groups):
+            raise HTTPException(status_code=400, detail={"code": "MODEL_NOT_IN_LIST", "message": f"模型不在清单中: {name}"})
+        ok, reason = llm.verify_model(name)  # 切换前先试水（1-token），防切到不可用模型
+        if not ok:
+            # 校验失败 → 自动回滚（当前模型不变），返回具体原因
+            raise HTTPException(status_code=400, detail={"code": "MODEL_VERIFY_FAILED", "message": reason})
+        llm.set_model(name)
+        save_current_model(name, base_dir=Path(config.db_path).parent)  # 持久化，重启不丢
+        logger.info("模型切换成功 name=%s", name)
+        return {"current": name}
 
     return app
 

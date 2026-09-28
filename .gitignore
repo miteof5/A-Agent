@@ -2,6 +2,7 @@
 actionagent.db
 logs/
 *.db-journal
+.current_model
 
 # Python 缓存
 __pycache__/
