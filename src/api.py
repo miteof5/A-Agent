@@ -247,7 +247,7 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
         content = payload.content.strip()
         if not content:
             raise HTTPException(status_code=400, detail={"code": "INVALID_CONTENT", "message": "消息内容不能为空"})
-        messages = rebuild_messages(storage, reactor.tools, task_id)
+        messages = rebuild_messages(storage, reactor.tools, task_id, config, reactor.llm)  # 续聊：带滚动记忆压缩
         if messages is None:
             raise HTTPException(status_code=409, detail={"code": "CONTINUE_UNSUPPORTED", "message": "该任务没有可重建的历史（旧任务），无法续聊"})
         # 追加本轮新消息；轮次号递增
@@ -352,6 +352,12 @@ async def _sse_generator(task_id: str, task, run: TaskRun | None, storage: Stora
                 elif ev["type"] == "agent/done":
                     replayed_done = True
                     yield _sse(None, "done", {"result": p.get("result", ""), "task_id": task_id})
+                elif ev["type"] == "memory/summary":
+                    # 滚动记忆：重放时告知前端"历史某段已压缩"（提示条，不参与对话渲染）
+                    yield _sse(None, "memory_compressed", {"turns": f"{p.get('turn_start', 0) + 1}-{p.get('turn_end', 0) + 1}", "task_id": task_id})
+                elif ev["type"] == "agent/token_usage":
+                    # 2026-09-30：历史会话打开时重放，前端累计出该会话的真实消耗
+                    yield _sse(None, "token_usage", {"turn": p.get("turn", 0), "step": p.get("step", 0), "prompt": p.get("prompt", 0), "completion": p.get("completion", 0), "total": p.get("total", 0), "task_id": task_id})
                 # status/ask/done/error 不重放：终态与 waiting 补发由下方逻辑负责，避免与前端状态机重复
         else:
             for s in storage.list_steps(task_id):

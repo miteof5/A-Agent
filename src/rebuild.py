@@ -21,18 +21,53 @@ from __future__ import annotations
 
 import json
 
+from .config import Config
+from .memory import SUMMARY_EVENT, build_memory_block, maybe_compact
 from .reactor import build_system_prompt
 
 
-def rebuild_messages(storage, tools: dict, task_id: str) -> list[dict] | None:
-    """从 events 重建该任务的完整 LLM 消息列表。无 events 返回 None。"""
+def rebuild_messages(
+    storage, tools: dict, task_id: str, config: Config | None = None, llm=None
+) -> list[dict] | None:
+    """从 events 重建该任务的 LLM 消息列表（滚动记忆压缩版）。
+
+    结构（分层短期记忆）：
+    1. system prompt（工具规则）
+    2. 摘要块 system 消息（可选）：第 3 层 LLM 段落摘要 + 第 2 层逐轮 Q&A
+    3. 最近 memory_full_turns 轮完整重建（第 1 层，原全量逻辑只作用于窗口内）
+
+    有 llm 时先触发 maybe_compact（轮完成、下一轮开始前压缩）。
+    无 events 返回 None。
+    """
+    config = config or Config()
+    if llm is not None:
+        maybe_compact(storage, llm, task_id, config)  # 可能新增 memory/summary 事件
     events = storage.list_events(task_id)
     if not events:
         return None
+    memory_block = build_memory_block(events, config)  # 摘要块（第 2、3 层）
+
+    # 完整窗口：最近 memory_full_turns 轮（第 1 层）
+    turns = [
+        e["payload"].get("turn")
+        for e in events
+        if e["type"] != SUMMARY_EVENT and e["payload"].get("turn") is not None
+    ]
+    if not turns:
+        return None
+    full_start = max(min(turns), max(turns) - config.memory_full_turns + 1)
+    window_events = [
+        e for e in events
+        if e["type"] != SUMMARY_EVENT
+        and e["payload"].get("turn") is not None
+        and e["payload"]["turn"] >= full_start
+    ]
 
     messages: list[dict] = [
         {"role": "system", "content": build_system_prompt(tools)}
     ]
+    if memory_block:
+        messages.append({"role": "system", "content": memory_block})
     pending_assistant: dict | None = None  # {"content": str, "tool_calls": [...]}
     pending_tools: list[dict] = []
 
@@ -49,7 +84,7 @@ def rebuild_messages(storage, tools: dict, task_id: str) -> list[dict] | None:
             messages.extend(pending_tools)
             pending_tools = []
 
-    for ev in events:
+    for ev in window_events:
         t, p = ev["type"], ev["payload"]
         if t == "agent/user":
             flush_group()

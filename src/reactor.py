@@ -204,6 +204,15 @@ class Reactor:
                 emit("agent/status", {"state": "paused", "turn": start_turn, "step": step})
                 return None
 
+            # token 消耗实时推送（SSE token_usage → 前端累计/本轮标识）
+            if call.usage:
+                emit("agent/token_usage", {
+                    "turn": start_turn, "step": step,
+                    "prompt": call.usage.get("prompt_tokens", 0),
+                    "completion": call.usage.get("completion_tokens", 0),
+                    "total": call.usage.get("total_tokens", 0),
+                })
+
             if call.text:
                 emit("agent/thought", {"turn": start_turn, "step": step, "text": call.text})
 

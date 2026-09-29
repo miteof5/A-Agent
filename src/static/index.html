@@ -240,6 +240,7 @@
       <span class="title" id="chatTitle">新会话</span>
       <span class="pill" id="statePill" style="background:#f3f4f6;color:#4b5563;">未开始</span>
       <span class="mode-tag" id="modeTag">on-demand</span>
+      <span id="tokenBadge" class="mode-tag" title="累计消耗 · 本轮上传">Σ 0 · ↑ 0</span>
       <span class="spacer"></span>
       <button id="stopBtn" class="stop-btn" style="display:none;">■ 停止任务</button>
     </div>
@@ -358,7 +359,7 @@ const stream = {
     this.close();
     const es = new EventSource('/api/v1/task/stream?task_id=' + encodeURIComponent(taskId) + '&replay=' + (replay ? 'true' : 'false'));
     this.es = es;
-    const types = ['status','user','thought','token','tool_call','tool_result','ask','done','error'];  // 2026-09-26：+user（重放渲染用户消息）
+    const types = ['status','user','thought','token','tool_call','tool_result','ask','done','error','token_usage','memory_compressed'];  // 2026-09-26：+user（重放渲染用户消息）；09-30：+token_usage/memory_compressed
     for (const t of types) es.addEventListener(t, (e) => { try { onEvent(e); } catch (err) { showToast('渲染出错：' + err.message, 'error'); } });
     es.onerror = () => { if (this.es !== es) return; this.close(); onError(); };
   },
@@ -397,7 +398,8 @@ const el = {
   modelView: document.getElementById('modelView'),
   modelBackBtn: document.getElementById('modelBackBtn'),
   modelCurrent: document.getElementById('modelCurrent'),
-  modelList: document.getElementById('modelList')
+  modelList: document.getElementById('modelList'),
+  tokenBadge: document.getElementById('tokenBadge')
 };
 
 const STATE_BADGE = {
@@ -414,6 +416,13 @@ const STATE_BADGE = {
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+/* ---- token 消耗标识（累计消耗 Σ + 本轮上传 ↑，SSE token_usage 即时更新）---- */
+let tokTotal = 0, tokLast = 0;
+function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n); }
+function renderTokenBadge() {
+  el.tokenBadge.style.display = '';
+  el.tokenBadge.textContent = 'Σ ' + fmtTok(tokTotal) + ' · ↑ ' + fmtTok(tokLast);
 }
 function showToast(msg, kind) {
   const box = document.getElementById('toastBox');
@@ -767,6 +776,15 @@ function addAskCard(question) {
 function onEvent(ev) {
   const d = ev.data ? JSON.parse(ev.data) : {};
   switch (ev.type) {
+    case 'token_usage':
+      tokTotal += (d.total || 0);
+      tokLast = (d.prompt || 0);
+      renderTokenBadge();
+      break;
+    case 'memory_compressed':
+      // 滚动记忆：历史某段已折叠为摘要（重放时静默，实时才提示）
+      if (!state.isReplaying) showToast('记忆已压缩：第 ' + d.turns + ' 轮已折叠为摘要，上下文瘦身', 'ok');
+      break;
     case 'status':
       setPill(d.state);
       if (d.state === 'paused') onFinished('stopped');
@@ -899,6 +917,8 @@ async function openSession(taskId, content, sandboxMode, stateName) {
   el.modeTag.textContent = MODE_LABELS[state.curTaskMode] || state.curTaskMode;
   el.modeSelect.value = state.curTaskMode;
   highlightSess(taskId);
+  tokTotal = 0; tokLast = 0;   // 2026-09-30：打开历史会话先清零，由重放 token_usage 重新累计
+  el.tokenBadge.textContent = 'Σ 0 · ↑ 0';
   emptyChat('加载会话历史…');
   setPill('pending');
   el.sendBtn.disabled = true;
@@ -1046,6 +1066,8 @@ function resetToNewChat() {
   el.sendBtn.disabled = false;
   el.sendBtn.textContent = '发送';
   highlightSess(null);
+  tokTotal = 0; tokLast = 0;
+  el.tokenBadge.textContent = 'Σ 0 · ↑ 0';
   emptyChat('👋 输入任务开始对话，例如：<br>“读取 README-S1.md 并总结”<br>或 “帮我删除桌面上有关截图的图片”');
 }
 document.getElementById('newChatBtn').addEventListener('click', resetToNewChat);

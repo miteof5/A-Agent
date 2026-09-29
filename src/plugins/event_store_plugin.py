@@ -3,7 +3,8 @@
 与 SSERelayPlugin 的分工：
 - SSERelay：内核事件 → SSE 转发（实时展示，payload 瘦身——tool_result 只发 summary）
 - 本插件：内核事件 → SQLite events 表（**全量 payload**——thought/tool_call 完整参数/
-  tool_result 完整 content/ask 问答对/done/error/status，token 除外）
+  tool_result 完整 content/ask 问答对/done/error/status；token_usage 落库供历史会话
+  重放累计消耗；agent/token 逐字流不落库——太碎且无重建价值）
 
 落库后即获得"可重建"能力（S4.3 从 events 拼回 LLM 上下文继续执行），
 历史重放源也从 steps 升级为 events（SSE 侧见 api.py）。
@@ -25,6 +26,7 @@ _STORE_EVENTS = (
     "agent/ask",
     "agent/done",
     "agent/error",
+    "agent/token_usage",  # 2026-09-30：落库供历史会话重放累计 token 消耗
 )
 
 

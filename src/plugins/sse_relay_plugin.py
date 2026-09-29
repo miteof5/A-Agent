@@ -22,6 +22,7 @@ _EVENT_MAP = {
     "agent/done": "done",
     "agent/error": "error",
     "agent/ask": "ask",  # S3.3：等待用户输入（澄清/审批）
+    "agent/token_usage": "token_usage",  # 记忆/token 标识：每次 LLM 调用的 token 消耗
 }
 
 

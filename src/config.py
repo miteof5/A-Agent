@@ -40,6 +40,9 @@ class Config:
     repeat_soft_limit: int = 3  # S5.1：RepeatGuard 温和纠偏阈值
     repeat_hard_limit: int = 3  # S5.1：RepeatGuard 强硬终止阈值
     models_file: str = DEFAULT_MODELS_FILE  # 模型切换：可用模型清单文件
+    memory_full_turns: int = 5  # 滚动记忆：完整上下文保留的最近轮数
+    memory_summary_chunk: int = 10  # 滚动记忆：逐轮 Q+A 攒满多少条触发一次 LLM 总结
+    memory_summary_chars: int = 400  # 滚动记忆：每条 LLM 摘要字数上限
     db_path: str = "actionagent.db"
 
 
@@ -67,5 +70,8 @@ def load_config() -> Config:
         repeat_soft_limit=int(os.getenv("AA_REPEAT_SOFT_LIMIT", "3")),
         repeat_hard_limit=int(os.getenv("AA_REPEAT_HARD_LIMIT", "3")),
         models_file=models_file,
+        memory_full_turns=int(os.getenv("AA_MEMORY_FULL_TURNS", "5")),
+        memory_summary_chunk=int(os.getenv("AA_MEMORY_SUMMARY_CHUNK", "10")),
+        memory_summary_chars=int(os.getenv("AA_MEMORY_SUMMARY_CHARS", "400")),
         db_path=db_path,
     )

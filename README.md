@@ -12,6 +12,8 @@
 - **RepeatGuard 防死循环**：双通道检测（同工具同参数 / 同结果），soft 温和纠偏喂回 LLM，hard 终止任务
 - **便捷切换模型**：`models.txt` 清单（按厂商分组、多模态最后）+ 前端「⚙ 模型」管理视图，运行时热切换（base_url/api_key 不变，只换模型名）；切换前自动校验（额度/存在性），失败自动回滚；切换结果持久化，重启不丢
 - **前端（单文件）**：对话式界面（会话列表 / 思考过程折叠 / 审批卡 / 问答卡 / 日志面板 / 模型管理），SSE 流式 token + 状态轮询兜底
+- **滚动记忆压缩**：三层短期记忆——最近 5 轮完整原文 + 逐轮 Q+A 规则摘要 + 每 10 轮一次 LLM 段落摘要（events 表全量保留原文，压缩只影响上传量）；续聊时自动触发，上下文不随轮次线性膨胀
+- **Token 消耗标识**：对话页实时显示「累计消耗 Σ + 本轮上传 ↑」（SSE 推送，即时更新），压缩时提示瘦身效果
 - **日志可观测**：标准 logging，`logs/agent.log` 10MB×5 轮转，`task=task-xxxx` 自动串联，uvicorn 日志同文件
 
 ## 技术栈
@@ -53,6 +55,7 @@ python -m src.main
 - `AA_MODELS_FILE`（模型清单文件，默认 `models.txt`）
 - `AA_DB_PATH`（SQLite 路径）· `AA_MAX_STEPS`（50）· `AA_MAX_LLM_CALLS`（200）
 - `AA_REPEAT_SOFT_LIMIT` / `AA_REPEAT_HARD_LIMIT`（3/3）
+- `AA_MEMORY_FULL_TURNS`（5，完整上下文保留轮数）· `AA_MEMORY_SUMMARY_CHUNK`（10，攒满多少条触发总结）· `AA_MEMORY_SUMMARY_CHARS`（400，摘要字数上限）
 - `AA_TOOL_MAX_BYTES`（65536）
 
 模型生效优先级：**显式 `AA_LLM_MODEL` > 上次切换持久化（`.current_model`）> 代码默认值 > 清单第一个**。
@@ -71,8 +74,9 @@ python -m src.main
 │   ├── runtime.py       # 后台任务线程管理
 │   ├── rebuild.py       # events → LLM messages 重建器（多轮上下文）
 │   ├── model_registry.py # models.txt 清单解析 + 当前模型持久化
+│   ├── memory.py        # 滚动记忆压缩（三层摘要 + 触发/重建）
 │   ├── storage.py       # SQLite（tasks/steps/events）
-│   └── llm_client.py    # OpenAI 兼容客户端（流式 + usage + set/verify_model）
+│   └── llm_client.py    # OpenAI 兼容客户端（流式 + usage + set/verify_model + summarize）
 ├── tests/               # RepeatGuard 测试 + 模型切换测试（FakeLLM，无需真实 Key）
 ├── models.txt           # 可用模型清单（按厂商分组、多模态最后；换平台重写此文件）
 └── *.md                 # 规划 / 契约 / 交接文档（见下）
@@ -93,5 +97,6 @@ python -m src.main
 - ✅ S0–S4：契约先行 → 最小闭环 → 流式 + 微内核 → 前端体验 → 数据与多轮对话（**已完成**）
 - ✅ S5.1 / S5.2：RepeatGuard 防死循环 + 日志可观测（**已完成**）
 - ✅ 模型切换：models.txt 清单 + 校验回滚 + 持久化 + 前端管理视图（**已完成**）
+- ✅ 滚动记忆压缩 + Token 标识：三层短期记忆 + 实时消耗显示（**已完成**）
 - ⏸ S5.3：部署（health 检查 + 一键启动脚本，方案已定）
 - 🔜 补强方向：文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆

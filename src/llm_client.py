@@ -25,12 +25,32 @@ def _tok(usage, attr):
     return getattr(usage, attr, "?")
 
 
+def _usage_dict(usage) -> dict | None:
+    """usage（object/dict/None）→ 规整 dict；取不到按 0。"""
+    if usage is None:
+        return None
+
+    def num(attr):
+        v = _tok(usage, attr)
+        return v if isinstance(v, int) else 0
+
+    total = num("total_tokens")
+    if not total:
+        total = num("prompt_tokens") + num("completion_tokens")
+    return {
+        "prompt_tokens": num("prompt_tokens"),
+        "completion_tokens": num("completion_tokens"),
+        "total_tokens": total,
+    }
+
+
 @dataclass
 class LLMCall:
     """一次 LLM 响应的结构化结果"""
 
     text: str | None = None
     tool_calls: list[dict] = field(default_factory=list)
+    usage: dict | None = None  # token 消耗（记忆压缩/token 标识用）：{prompt_tokens, completion_tokens, total_tokens}
     # tool_calls 元素格式: {"id": str, "name": str, "arguments": dict}
 
 
@@ -86,6 +106,28 @@ class LLMClient:
                 return False, f"模型不存在（404）：{name}"
             return False, f"校验失败：{e}"
 
+    def summarize(self, history_text: str, max_chars: int = 400) -> tuple[str, dict]:
+        """记忆压缩：把一批轮次的完整历史原文压缩成一段中文摘要。
+
+        返回 (摘要文本, usage)。只做一次性投入——换取后续每轮不再重复上传这批原文。
+        """
+        client = self._get_client()
+        system = (
+            "你是对话记忆压缩器。把用户提供的多轮 AI Agent 任务历史压缩成中文摘要："
+            "保留每轮的用户要求、关键动作、最终结论；不要复述推理细节和工具输出；"
+            f"整段控制在 {max_chars} 字以内。"
+        )
+        resp = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": history_text},
+            ],
+            temperature=0.3,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        return text, _usage_dict(getattr(resp, "usage", None)) or {}
+
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMCall:
         client = self._get_client()
         t0 = time.monotonic()
@@ -111,7 +153,7 @@ class LLMClient:
             _tok(usage, "prompt_tokens"), _tok(usage, "completion_tokens"),
             len(tool_calls),
         )
-        return LLMCall(text=msg.content, tool_calls=tool_calls)
+        return LLMCall(text=msg.content, tool_calls=tool_calls, usage=_usage_dict(getattr(resp, "usage", None)))
 
     def chat_stream(
         self,
@@ -189,4 +231,4 @@ class LLMClient:
             _tok(usage, "prompt_tokens"), _tok(usage, "completion_tokens"),
             len(tool_calls), len(text),
         )
-        return LLMCall(text=text or None, tool_calls=tool_calls)
+        return LLMCall(text=text or None, tool_calls=tool_calls, usage=_usage_dict(usage))
