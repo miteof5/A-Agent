@@ -128,6 +128,89 @@ class LLMClient:
         text = (resp.choices[0].message.content or "").strip()
         return text, _usage_dict(getattr(resp, "usage", None)) or {}
 
+    def extract_memories(
+        self,
+        user_input: str,
+        result: str,
+        existing: list[dict],
+        schema: dict | None = None,
+        max_items: int = 3,
+        max_chars: int = 100,
+    ) -> tuple[list[dict], dict]:
+        """S5 长期记忆提炼：本轮 user+result 与已有记忆摘要 → 结构化候选。
+
+        schema（主题语义配置，见 config.DEFAULT_LONG_MEMORY_SCHEMA）决定分类与判断
+        标准——机制通用、主题可插拔；传 None 时用内置默认三类。
+
+        返回 (candidates, usage)：
+          candidates: [{"action": "add", "category", "content", "keywords"},
+                       {"action": "update", "target_id", "content", "keywords"},
+                       {"action": "skip", "reason"}]
+          空列表表示"本次无有价值信息"（合法，宁缺毋滥）。
+        解析失败/异常 → 返回空列表（安全兜底，绝不抛错影响主流程）。
+        """
+        schema = schema or {}
+        categories = schema.get("categories") or {}
+        cat_desc = " / ".join(f"{k}（{v}）" for k, v in categories.items())
+        if not cat_desc:
+            cat_desc = "任意稳定的跨会话事实"
+        extra_rules = (schema.get("extract_extra_rules") or "").strip()
+        extra_line = f"{extra_rules}\n" if extra_rules else ""
+        existing_text = "\n".join(
+            f"- id={m.get('id')} [{m.get('category')}] {m.get('content')}"
+            for m in existing
+        ) or "（暂无已有记忆）"
+        system = (
+            "你是长期记忆提炼器。根据“本轮任务”与“已有记忆”，决定新增/更新哪些跨会话稳定事实。\n"
+            "判断标准（宁缺毋滥，宁可不记不可乱记）：\n"
+            f"1. 只提炼这些类别：{cat_desc}。\n"
+            "2. 黄金标准：用户下一个新会话会不会再重复说一遍？会→值得记；不会→不记。\n"
+            "3. 不记：任务流水、会话内过程细节、可自动重新发现的信息（如文件内容、目录结构）。\n"
+            f"4. 每条 content 不超过 {max_chars} 字；拿不准就不记；允许返回空数组（本次无有价值信息）。\n"
+            "5. 去重：候选与已有记忆“说的是同一件事”（写法不同也算）→ 用 update 更新旧条目，"
+            "不要 add 新条目；完全无冲突 → add。\n"
+            f"6. 一次最多输出 {max_items} 条。\n"
+            f"{extra_line}"
+            "只输出 JSON 数组，不要任何其他文字。"
+        )
+        user = (
+            "已有记忆：\n" + existing_text + "\n\n"
+            "本轮任务：\n用户输入：\n" + (user_input or "") + "\n\n"
+            "任务结果：\n" + (result or "") + "\n\n"
+            "请输出 JSON 数组（每条含 action/category/content/keywords；update 需含 target_id）："
+        )
+        client = self._get_client()
+        try:
+            resp = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning("长期记忆提炼调用失败: %s", e)
+            return [], {}
+        usage = _usage_dict(getattr(resp, "usage", None)) or {}
+        # 容错解析：剥离 ```json 代码块，取第一个 [ ... ] 数组
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1] if "```" in text[3:] else text
+            text = text.strip().lstrip("json").strip()
+        try:
+            start, end = text.find("["), text.rfind("]")
+            if start == -1 or end == -1 or end <= start:
+                logger.info("长期记忆提炼：无数组输出（空）len=%d", len(text))
+                return [], usage
+            data = json.loads(text[start : end + 1])
+            items = [d for d in data if isinstance(d, dict) and d.get("action") in ("add", "update", "skip")][:max_items]
+            return items, usage
+        except Exception as e:
+            logger.warning("长期记忆提炼 JSON 解析失败: %s", e)
+            return [], usage
+
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMCall:
         client = self._get_client()
         t0 = time.monotonic()

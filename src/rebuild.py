@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 
 from .config import Config
+from .long_memory import build_long_memory_block
 from .memory import SUMMARY_EVENT, build_memory_block, maybe_compact
 from .reactor import build_system_prompt
 
@@ -66,6 +67,15 @@ def rebuild_messages(
     messages: list[dict] = [
         {"role": "system", "content": build_system_prompt(tools)}
     ]
+    # S5：续聊同样注入长期记忆块（按最近一轮用户输入检索相关条目，在短期记忆块之前）
+    last_user = ""
+    for e in reversed(events):
+        if e["type"] == "agent/user":
+            last_user = e["payload"].get("content") or ""
+            break
+    long_block = build_long_memory_block(storage, config, user_input=last_user)
+    if long_block:
+        messages.append({"role": "system", "content": long_block})
     if memory_block:
         messages.append({"role": "system", "content": memory_block})
     pending_assistant: dict | None = None  # {"content": str, "tool_calls": [...]}

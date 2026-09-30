@@ -17,8 +17,9 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .model_registry import first_model, load_current_model, load_models
@@ -27,6 +28,25 @@ DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 # 默认模型（用户可直接改这里，或改用环境变量 AA_LLM_MODEL 覆盖）
 DEFAULT_MODEL = "deepseek-v4-flash-0731"
 DEFAULT_MODELS_FILE = "models.txt"
+
+# S5 长期记忆：主题语义配置块（方案 A：机制通用、主题可插拔）。
+# 换主题/换场景时只改这里（或环境变量 AA_LONG_MEMORY_SCHEMA=JSON），机制层代码零改动：
+#   name            注入块标题用词（渲染为【name】）
+#   header_hint     注入块引导语（渲染为（header_hint）：）
+#   categories      分类字典：key → 中文语义说明（写进提炼 prompt，模型按此分类）
+#   max_items       单次提炼最多输出候选条数
+#   extract_extra_rules  主题方追加的提炼判断标准（可选，追加到 prompt）
+DEFAULT_LONG_MEMORY_SCHEMA = {
+    "name": "长期记忆",
+    "header_hint": "与用户跨会话积累的稳定事实，直接信任并用于本次任务",
+    "categories": {
+        "user_profile": "用户画像：身份/偏好/沟通习惯",
+        "project_fact": "项目与环境事实：路径/命令/踩坑/决策理由",
+        "user_goal": "用户目标与关注点",
+    },
+    "max_items": 3,
+    "extract_extra_rules": "",
+}
 
 
 @dataclass
@@ -43,6 +63,11 @@ class Config:
     memory_full_turns: int = 5  # 滚动记忆：完整上下文保留的最近轮数
     memory_summary_chunk: int = 10  # 滚动记忆：逐轮 Q+A 攒满多少条触发一次 LLM 总结
     memory_summary_chars: int = 400  # 滚动记忆：每条 LLM 摘要字数上限
+    long_memory_inject_limit: int = 5  # S5 长期记忆：每次注入的活跃记忆条数上限
+    long_memory_max_chars: int = 100  # S5 长期记忆：每条注入内容的字数上限
+    long_memory_schema: dict = field(  # S5 长期记忆：主题语义配置（默认通用三类，可整体覆写）
+        default_factory=lambda: dict(DEFAULT_LONG_MEMORY_SCHEMA)
+    )
     db_path: str = "actionagent.db"
 
 
@@ -73,5 +98,31 @@ def load_config() -> Config:
         memory_full_turns=int(os.getenv("AA_MEMORY_FULL_TURNS", "5")),
         memory_summary_chunk=int(os.getenv("AA_MEMORY_SUMMARY_CHUNK", "10")),
         memory_summary_chars=int(os.getenv("AA_MEMORY_SUMMARY_CHARS", "400")),
+        long_memory_inject_limit=int(os.getenv("AA_LONG_MEMORY_INJECT_LIMIT", "5")),
+        long_memory_max_chars=int(os.getenv("AA_LONG_MEMORY_MAX_CHARS", "100")),
+        long_memory_schema=_load_long_memory_schema(),
         db_path=db_path,
     )
+
+
+def _load_long_memory_schema() -> dict:
+    """读 AA_LONG_MEMORY_SCHEMA（JSON）覆写主题语义；缺失/非法 → 默认 schema。
+
+    JSON 为整体覆写；未给出的键保留默认值（浅合并），便于只改分类或只改标题。
+    """
+    raw = os.getenv("AA_LONG_MEMORY_SCHEMA", "").strip()
+    if not raw:
+        return dict(DEFAULT_LONG_MEMORY_SCHEMA)
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return dict(DEFAULT_LONG_MEMORY_SCHEMA)
+        merged = dict(DEFAULT_LONG_MEMORY_SCHEMA)
+        for k, v in data.items():
+            if k in merged and isinstance(v, dict) and isinstance(merged[k], dict):
+                merged[k] = {**merged[k], **v}  # categories 等嵌套字典浅合并
+            else:
+                merged[k] = v
+        return merged
+    except Exception:
+        return dict(DEFAULT_LONG_MEMORY_SCHEMA)

@@ -20,14 +20,30 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 
 from .config import Config
 from .kernel.plugin import AgentContext
 from .llm_client import LLMCall
+from .long_memory import build_long_memory_block, extract_and_store
 from .models import StepResult, StepStatus, TaskState, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# 人设层（第 4 层·身份子层，独立常量）：由 Agent 自由发挥产出、用户确认落地的"阿澈"。
+# 人称规范：system prompt 中"你"= 模型（阿澈），"用户"= 使用者的第三人称，避免人称错位。
+# 与 CORE_PROMPT 分工：PERSONA 管"怎么说/怎么相处"，CORE_PROMPT 管"怎么做/规则"，互不干扰；
+# 将来换人设只改本常量，CORE_PROMPT 永不随人设变动。
+PERSONA = """【身份定位】
+你是阿澈，一名运行在用户电脑上的自主 AI 伙伴，陪用户写代码、查资料、理思路、做决策，也陪用户复盘一天。你和用户并肩在真实的问题里穿行：你负责看清路况、探明风险，用户负责掌舵。
+
+【性格语气】
+直率务实，温和但不含糊。看到漏洞你直说，不绕弯、不粉饰；说话简洁有劲，少用空话和大词；带一点恰到好处的幽默，在用户需要时点亮点气氛，但从不喧宾夺主。
+
+【关系与温度】
+好消息你放大告诉用户；坏消息你先陪用户缓三秒，再一起想办法——报真实的忧，不粉饰。犯错你认得快、改得快，不狡辩、不甩锅。用户烦躁时你安静接住用户；用户迷路时你帮用户看回最初的"为什么"。你是用户的工具，更是用户的同行者：用户认真，你就认真到底。"""
+
 
 # 核心提示：只放"不变的身份与总体工作方式"（提示词分层：第 4 层）。
 # 工具级使用规则（如 shell_run 的破坏性操作三步法）由各工具自带 prompt_fragment，
@@ -61,7 +77,7 @@ def build_system_prompt(tools: dict[str, "BaseTool"]) -> str:
     S2.4 微内核化后，工具注册表由 ToolRegistryPlugin 暴露到 ctx.tools，
     这里从该注册表读取 prompt_fragment。
     """
-    parts = [CORE_PROMPT]
+    parts = [PERSONA, CORE_PROMPT]  # 人设在前（定义"是谁"），工作规则在后（定义"怎么干"）
     for tool in tools.values():
         if tool.prompt_fragment:
             parts.append(tool.prompt_fragment)
@@ -154,8 +170,13 @@ class Reactor:
         emit("agent/user", {"turn": start_turn, "content": content})
 
         if init_messages is None:
+            # S5：新任务注入长期记忆块（跨会话稳定事实，按当前任务内容检索相关条目）
+            _sys = build_system_prompt(self.tools)
+            _lm = build_long_memory_block(self.storage, self.config, user_input=content)
+            if _lm:
+                _sys = _sys + "\n\n" + _lm
             messages: list[dict] = [
-                {"role": "system", "content": build_system_prompt(self.tools)},
+                {"role": "system", "content": _sys},
                 {"role": "user", "content": content},
             ]
         else:
@@ -307,6 +328,16 @@ class Reactor:
             )
             emit("agent/done", {"result": final})
             logger.info("任务完成 step=%d result=%r", step + 1, final[:100])
+            # S5：长期记忆异步提炼（不阻塞主流程；失败只记日志，绝不影响任务结果）
+            try:
+                threading.Thread(
+                    target=extract_and_store,
+                    args=(self.storage, self.llm, task_id, self.config),
+                    daemon=True,
+                    name=f"mem-{task_id[:8]}",
+                ).start()
+            except Exception:
+                logger.exception("长期记忆提炼线程启动失败 task_id=%s", task_id)
             return final
 
         # ---- 4. 步数耗尽 ----

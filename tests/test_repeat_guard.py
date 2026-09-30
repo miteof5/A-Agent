@@ -186,7 +186,7 @@ def test_configurable_threshold(tmp: Path):
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="aa_rg_") as td:
+    with tempfile.TemporaryDirectory(prefix="aa_rg_", ignore_cleanup_errors=True) as td:
         tmp = Path(td)
         test_same_call_loop(tmp)
         test_soft_corrects(tmp)

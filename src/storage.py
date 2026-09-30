@@ -89,6 +89,176 @@ class Storage:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq)"
             )
+            # S5：长期记忆表（跨会话稳定事实：用户画像/项目事实/用户目标）
+            # 与 events 表分工：events=录像（只增不改），memory=笔记（可更新/失效）
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category     TEXT NOT NULL,
+                    content      TEXT NOT NULL,
+                    keywords     TEXT DEFAULT '',
+                    source       TEXT DEFAULT 'auto',
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL,
+                    last_used_at TEXT,
+                    status       TEXT DEFAULT 'active',
+                    UNIQUE(category, content)
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_cat_status ON memory(category, status)"
+            )
+            # S5.1 检索注入：FTS5 全文索引（trigram tokenizer，支持中文/标识符子串匹配）。
+            # 触发器自动同步（insert/update/delete）；首次建表时回填既有数据。
+            has_fts = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_fts'"
+            ).fetchone()
+            if not has_fts:
+                self._conn.execute(
+                    "CREATE VIRTUAL TABLE memory_fts USING fts5(category, content, keywords, tokenize='trigram')"
+                )
+                self._conn.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS memory_fts_ai AFTER INSERT ON memory BEGIN
+                        INSERT INTO memory_fts(rowid, category, content, keywords)
+                        VALUES (new.id, new.category, new.content, new.keywords);
+                    END
+                    """
+                )
+                self._conn.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS memory_fts_ad AFTER DELETE ON memory BEGIN
+                        DELETE FROM memory_fts WHERE rowid = old.id;
+                    END
+                    """
+                )
+                self._conn.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS memory_fts_au AFTER UPDATE ON memory BEGIN
+                        DELETE FROM memory_fts WHERE rowid = old.id;
+                        INSERT INTO memory_fts(rowid, category, content, keywords)
+                        VALUES (new.id, new.category, new.content, new.keywords);
+                    END
+                    """
+                )
+                self._conn.execute(
+                    "INSERT INTO memory_fts(rowid, category, content, keywords) "
+                    "SELECT id, category, content, keywords FROM memory"
+                )
+
+    # ---------- memory（S5 长期记忆）----------
+
+    def create_memory(self, category: str, content: str, keywords: str = "", source: str = "auto") -> int | None:
+        """新增一条长期记忆。同类别同内容已存在（UNIQUE 冲突）→ 不新增，返回 None。"""
+        if not category or not content:
+            return None
+        content = content.strip()
+        if len(content) > 500:
+            content = content[:500]  # 防御：内容超长截断（正常应 ≤100 字）
+        now = now_iso()
+        try:
+            with self._lock, self._conn:
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO memory (category, content, keywords, source, created_at, updated_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'active')
+                    """,
+                    (category, content, keywords, source, now, now),
+                )
+                return cur.lastrowid
+        except sqlite3.IntegrityError:
+            return None  # UNIQUE(category, content) 重复 → 不新增
+
+    def update_memory(self, memory_id: int, content: str | None = None, keywords: str | None = None) -> bool:
+        """更新条目内容（合并新信息），刷新 updated_at。"""
+        fields, params = [], []
+        if content is not None:
+            fields.append("content = ?")
+            params.append(content.strip())
+        if keywords is not None:
+            fields.append("keywords = ?")
+            params.append(keywords)
+        if not fields:
+            return False
+        fields.append("updated_at = ?")
+        params.append(now_iso())
+        params.append(memory_id)
+        with self._lock:
+            cur = self._conn.execute(f"UPDATE memory SET {', '.join(fields)} WHERE id = ?", params)
+            return cur.rowcount > 0
+
+    def get_memory(self, memory_id: int) -> dict | None:
+        row = self._execute("SELECT * FROM memory WHERE id = ?", (memory_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_memory(self, category: str | None = None, include_inactive: bool = False, limit: int | None = None) -> list[dict]:
+        """列出记忆（默认仅 active）。管理视图/提炼去重用。"""
+        sql = "SELECT * FROM memory"
+        conds, params = [], []
+        if category:
+            conds.append("category = ?")
+            params.append(category)
+        if not include_inactive:
+            conds.append("status = 'active'")
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY id DESC"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [dict(r) for r in self._execute(sql, params).fetchall()]
+
+    def retrieve_memories(self, limit: int = 5) -> list[dict]:
+        """检索要注入的活跃记忆：按活跃度排序（最近被用过 > 最近更新），取 top N。
+
+        作为关键词检索（search_memories）的兜底通道。
+        """
+        rows = self._execute(
+            """
+            SELECT * FROM memory
+            WHERE status = 'active'
+            ORDER BY (last_used_at IS NULL), last_used_at DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_memories(self, query_terms: list[str], limit: int = 10) -> list[dict]:
+        """FTS5 关键词检索（trigram 子串匹配）→ 候选记忆（仅 active）。
+
+        - 仅接受长度 ≥3 的检索词（trigram 下限；<3 的词无索引可查）
+        - 多词 OR 组合；bm25 相关度优先、活跃度 tie-break
+        - 返回 [dict]（memory 表全字段），未命中返回 []
+        """
+        terms = [t.strip() for t in (query_terms or []) if len(t.strip()) >= 3][:8]
+        if not terms:
+            return []
+        match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+        rows = self._execute(
+            """
+            SELECT m.* FROM memory_fts f
+            JOIN memory m ON m.id = f.rowid
+            WHERE m.status = 'active' AND memory_fts MATCH ?
+            ORDER BY bm25(memory_fts) ASC, (m.last_used_at IS NULL) ASC, m.last_used_at DESC
+            LIMIT ?
+            """,
+            (match, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def touch_memory(self, memory_id: int) -> None:
+        """刷新活跃度（被检索注入时调用）。"""
+        with self._lock:
+            self._conn.execute("UPDATE memory SET last_used_at = ? WHERE id = ?", (now_iso(), memory_id))
+
+    def set_memory_status(self, memory_id: int, status: str) -> bool:
+        """失效/恢复：superseded（被新版替代）/ archived（停用）。不硬删，保留审计。"""
+        with self._lock:
+            cur = self._conn.execute("UPDATE memory SET status = ?, updated_at = ? WHERE id = ?", (status, now_iso(), memory_id))
+            return cur.rowcount > 0
 
     def close(self) -> None:
         with self._lock:
