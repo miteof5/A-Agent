@@ -81,8 +81,10 @@
 
   .chat-flow {
     flex: 1; overflow-y: auto;
-    /* DeepSeek 式居中窄栏：宽屏两侧留白，消息不再贴边 */
-    padding: 20px max(24px, calc((100% - 780px) / 2)) 40px;
+    /* 固定 900px 内容区：AI 900 贴左、用户 600 贴右、右缘重合，不随屏幕宽度变化 */
+    max-width: 996px; /* 996 - 左右 padding 96 = 900px 内容区 */
+    margin-left: 240px;
+    padding: 20px 48px 40px;
     display: flex; flex-direction: column; gap: 12px;
   }
   .chat-empty {
@@ -91,12 +93,13 @@
 
   /* ---- 对话气泡 / 过程卡（DeepSeek 风：浅底、圆润、克制） ---- */
   .msg-user {
-    align-self: flex-end; max-width: 72%; background: #eef1ff; color: #1f2328;
+    align-self: flex-end; max-width: 600px; margin-right: 0;
+    background: #eef1ff; color: #1f2328;
     border-radius: 16px 16px 4px 16px; padding: 10px 14px;
     font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
   }
   .msg-agent {
-    align-self: flex-start; max-width: 92%; background: #fff;
+    align-self: flex-start; max-width: 900px; background: #fff;
     border: 1px solid #eceef1; border-radius: 16px 4px 16px 16px;
     padding: 10px 14px; font-size: 14px; line-height: 1.7;
     white-space: pre-wrap; word-break: break-all;
@@ -165,25 +168,70 @@
   .ask-btn:hover { background: #047857; }
   .ask-btn:disabled { background: #9ca3af; cursor: not-allowed; }
 
-  /* ---- 底部输入区（DeepSeek 风：居中限宽、浅底圆角） ---- */
+  /* ---- 底部输入区（豆包/DeepSeek 式：圆角卡片容器 + 底部工具行） ---- */
   .chat-input {
-    padding: 10px max(24px, calc((100% - 780px) / 2)) 14px;
-    border-top: 1px solid #eceef1; background: #fff;
-    display: flex; gap: 8px; align-items: flex-end;
+    margin-left: 240px; max-width: 996px;   /* 与消息区对齐 */
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 12px 12px 10px;
+    border: 1px solid #e5e7eb; border-radius: 16px; background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,.04);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .chat-input:focus-within {
+    border-color: #4d6bfe;
+    box-shadow: 0 0 0 3px rgba(77,107,254,.12);
   }
   .chat-input textarea {
-    flex: 1; min-height: 44px; max-height: 120px; resize: vertical;
-    padding: 10px 12px; border: 1px solid #e0e4ee; border-radius: 12px;
-    font-size: 14px; font-family: inherit; background: #fafbfc;
+    flex: none; width: 100%; min-height: 30px; max-height: 240px; /* 约10行，之后出现滚动条 */
+    padding: 4px 4px; border: none; outline: none; background: transparent;
+    font-size: 14px; font-family: inherit; line-height: 1.6; color: #1f2328;
+    resize: none; overflow-y: auto;
   }
-  .chat-input textarea:focus { outline: 2px solid #4d6bfe; border-color: transparent; background: #fff; }
-  .chat-input select {
-    height: 44px; padding: 0 8px; border: 1px solid #e0e4ee; border-radius: 10px;
-    font-size: 12px; background: #fff;
+  .chat-input textarea::placeholder { color: #b0b7c3; }
+  .input-bar { display: flex; align-items: center; gap: 10px; }
+  /* 自定义下拉（模式选择）：向上弹出、圆角选项卡片，替代原生直角 select */
+  .dropdown { position: relative; }
+  .dropdown-hidden { display: none; }
+  .dropdown-trigger {
+    height: 30px; padding: 0 12px; border: 1px solid #e5e7eb; border-radius: 8px;
+    font-size: 12px; background: #fafbfc; color: #3f4753; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: border-color .15s, background .15s;
   }
+  .dropdown-trigger:hover { border-color: #c9d2e3; }
+  .dropdown-trigger[aria-expanded="true"] { border-color: #4d6bfe; }
+  .dropdown-trigger::after {
+    content: ''; width: 0; height: 0;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid #9ca3af; transition: transform .15s;
+  }
+  .dropdown-trigger[aria-expanded="true"]::after { transform: rotate(180deg); }
+  .dropdown-menu {
+    position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 100;
+    min-width: 170px; padding: 5px;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+    box-shadow: 0 -6px 24px rgba(0,0,0,.08), 0 6px 20px rgba(0,0,0,.06);
+    display: none;
+  }
+  .dropdown-menu.open { display: block; }
+  .dropdown-item {
+    padding: 6px 8px; border-radius: 8px;
+    display: flex; flex-direction: column; gap: 1px; cursor: pointer;
+  }
+  .dropdown-item:hover { background: #f2f4fa; }
+  .dropdown-item.selected { background: #eef1ff; }
+  .di-main {
+    font-size: 12px; color: #1f2328;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .dropdown-item.selected .di-main { color: #4d6bfe; font-weight: 500; }
+  .dropdown-item.selected .di-main::after { content: '✓'; color: #4d6bfe; font-weight: 600; }
+  .di-sub { font-size: 11px; color: #9ca3af; }
   .send-btn {
-    height: 44px; padding: 0 22px; border: none; border-radius: 12px;
-    background: #4d6bfe; color: #fff; font-size: 14px; cursor: pointer;
+    height: 32px; padding: 0 16px; margin-left: auto;
+    border: none; border-radius: 8px;
+    background: #4d6bfe; color: #fff; font-size: 13px; cursor: pointer;
+    transition: background .15s;
   }
   .send-btn:hover { background: #3a56e8; }
   .send-btn:disabled { background: #9ca3af; cursor: not-allowed; }
@@ -252,11 +300,27 @@
     </div>
     <div class="chat-input">
       <textarea id="taskInput" placeholder="输入任务，Ctrl+Enter 发送…"></textarea>
-      <select id="modeSelect">
-        <option value="on-demand">🔍 按需确认</option>
-        <option value="full-access">⚡ 全部允许</option>
-      </select>
-      <button id="sendBtn" class="send-btn">发送</button>
+      <div class="input-bar">
+        <div class="dropdown" id="modeDropdown">
+          <select id="modeSelect" class="dropdown-hidden">
+            <option value="on-demand">🔍 按需确认</option>
+            <option value="full-access">⚡ 全部允许</option>
+          </select>
+          <button type="button" class="dropdown-trigger" id="modeTrigger">🔍 按需确认</button>
+          <div class="dropdown-menu" id="modeMenu">
+            <div class="dropdown-item" data-value="on-demand">
+              <span class="di-main">🔍 按需确认</span>
+              <span class="di-sub">只对风险操作询问</span>
+            </div>
+            <div class="dropdown-item" data-value="full-access">
+              <span class="di-main">⚡ 全部允许</span>
+              <span class="di-sub">不受限执行任务</span>
+            </div>
+          </div>
+        </div>
+        <span class="input-hint">Ctrl+Enter 发送 · Enter 换行</span>
+        <button id="sendBtn" class="send-btn">发送</button>
+      </div>
     </div>
   </main>
 </div>
@@ -952,6 +1016,7 @@ async function runTask() {
   }
   // S4.3：已结束的会话 → 同会话续聊（多轮对话），不新建会话
   el.taskInput.value = '';  // 发送后清空输入框（对话式交互惯例，内容已在对话流中展示）
+  el.taskInput.style.height = '';  // 重置为单行高度
   if (state.curTaskId && ['done', 'failed', 'paused', 'interrupted'].includes(state.curState)) {
     return continueChat(state.curTaskId, content);
   }
@@ -1078,6 +1143,43 @@ document.getElementById('modelBtn').addEventListener('click', openModelView);
 document.getElementById('modelBackBtn').addEventListener('click', closeModelView);
 el.sendBtn.addEventListener('click', runTask);
 el.taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask(); });
+/* 输入框 auto-grow（豆包式）：高度跟随内容长高，最多约10行，超出出现滚动条 */
+el.taskInput.addEventListener('input', () => {
+  el.taskInput.style.height = 'auto';
+  el.taskInput.style.height = Math.min(el.taskInput.scrollHeight, 240) + 'px';
+});
+/* 自定义下拉（模式选择）：向上弹出圆角菜单，同步原生 select 值 */
+const modeTrigger = document.getElementById('modeTrigger');
+const modeMenu = document.getElementById('modeMenu');
+const syncTrigger = () => {
+  const sel = el.modeSelect;
+  const opt = sel.options[sel.selectedIndex];
+  modeTrigger.textContent = opt ? opt.textContent : sel.value;
+  document.querySelectorAll('#modeMenu .dropdown-item').forEach((it) => {
+    it.classList.toggle('selected', it.dataset.value === sel.value);
+  });
+};
+modeTrigger.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = modeMenu.classList.toggle('open');
+  modeTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+modeMenu.addEventListener('click', (e) => {
+  const item = e.target.closest('.dropdown-item');
+  if (!item) return;
+  el.modeSelect.value = item.dataset.value;
+  el.modeSelect.dispatchEvent(new Event('change'));
+  syncTrigger();
+  modeMenu.classList.remove('open');
+  modeTrigger.setAttribute('aria-expanded', 'false');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#modeDropdown')) {
+    modeMenu.classList.remove('open');
+    modeTrigger.setAttribute('aria-expanded', 'false');
+  }
+});
+syncTrigger();
 el.stopBtn.addEventListener('click', stopTask);
 el.sessList.addEventListener('click', (e) => {
   const item = e.target.closest('.sess');
