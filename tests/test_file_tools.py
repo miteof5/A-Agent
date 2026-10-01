@@ -10,6 +10,7 @@
 6. file_write：overwrite / append / 目录自动创建
 7. file_write：JSON 回读校验（合法通过；坏 JSON json_valid=False）
 8. 权限：file_write on-demand 需审批、full-access 放行；file_view 两档放行
+9. file_write：replace 精准编辑（改/删/插 + 唯一匹配校验 + CRLF 容错）
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def test_text_and_pagination():
         # 缺路径
         r = FV.execute({})
         assert not r.ok and "path" in r.error
-        print("[1/8] file_view 文本 + 分页 通过")
+        print("[1/9] file_view 文本 + 分页 通过")
 
 
 def test_gbk_fallback():
@@ -55,7 +56,7 @@ def test_gbk_fallback():
         f.write_bytes("中文内容：端口 8000，配置文件".encode("gbk"))
         r = FV.execute({"path": str(f)})
         assert r.ok and "端口 8000" in r.content, "GBK 应回退解码成功（不乱码）"
-        print("[2/8] file_view GBK 编码回退 通过")
+        print("[2/9] file_view GBK 编码回退 通过")
 
 
 def test_docx_read():
@@ -79,7 +80,7 @@ def test_docx_read():
         assert r.ok and r.metadata["format"] == "docx", "应识别为 docx"
         assert "端口是 8000" in r.content, "应提取段落文本"
         assert "8000" in r.content and "端口" in r.content, "应提取表格"
-        print("[3/8] file_view docx 解析 通过")
+        print("[3/9] file_view docx 解析 通过")
 
 
 def test_xlsx_read():
@@ -100,7 +101,7 @@ def test_xlsx_read():
         r = FV.execute({"path": str(f)})
         assert r.ok and r.metadata["format"] == "xlsx", "应识别为 xlsx"
         assert "模型" in r.content and "qwen3.8-max" in r.content, "应按 sheet 提取内容"
-        print("[4/8] file_view xlsx 解析 通过")
+        print("[4/9] file_view xlsx 解析 通过")
 
 
 def test_pdf_dispatch_and_fallback():
@@ -115,7 +116,7 @@ def test_pdf_dispatch_and_fallback():
         fake.write_text("这其实是个文本文件", encoding="utf-8")
         r = FV.execute({"path": str(fake)})
         assert r.ok and r.metadata["format"] == "text", "非 %PDF 开头应按文本处理"
-        print("[5/8] file_view PDF 分派与容错 通过")
+        print("[5/9] file_view PDF 分派与容错 通过")
 
 
 def test_write_overwrite_append():
@@ -137,7 +138,7 @@ def test_write_overwrite_append():
         assert not r.ok, "缺 content 应报错"
         r = FW.execute({"path": str(f), "content": "x", "mode": "bogus"})
         assert not r.ok, "非法 mode 应报错"
-        print("[6/8] file_write 覆盖/追加/自动建目录 通过")
+        print("[6/9] file_write 覆盖/追加/自动建目录 通过")
 
 
 def test_write_json_validation():
@@ -152,7 +153,7 @@ def test_write_json_validation():
         txt = Path(td) / "plain.txt"
         r = FW.execute({"path": str(txt), "content": "普通文本"})
         assert r.ok and r.metadata["json_valid"] is None, "非 JSON 不触发校验"
-        print("[7/8] file_write JSON 回读校验 通过")
+        print("[7/9] file_write JSON 回读校验 通过")
 
 
 def test_permission_rules():
@@ -167,7 +168,52 @@ def test_permission_rules():
     assert out == ApprovalOutcome.ALLOWED, "file_view on-demand 应放行"
     out, _ = p.check(SandboxMode.FULL_ACCESS.value, "file_view", {"path": "D:/x/in.txt"})
     assert out == ApprovalOutcome.ALLOWED, "file_view full-access 应放行"
-    print("[8/8] 权限规则（写审批/读放行） 通过")
+    print("[8/9] 权限规则（写审批/读放行） 通过")
+
+
+def test_write_replace():
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "code.py"
+        f.write_text('PORT = 8000\nNAME = "agent"\n', encoding="utf-8")
+        # 改：唯一匹配替换
+        r = FW.execute({"path": str(f), "mode": "replace", "old_text": "PORT = 8000", "content": "PORT = 9000"})
+        assert r.ok and r.metadata["mode"] == "replace" and r.metadata["replaced_occurrences"] == 1
+        assert f.read_text(encoding="utf-8") == 'PORT = 9000\nNAME = "agent"\n', "唯一匹配应精准替换"
+        # 删：替换为空串
+        r = FW.execute({"path": str(f), "mode": "replace", "old_text": 'NAME = "agent"\n', "content": ""})
+        assert r.ok and f.read_text(encoding="utf-8") == "PORT = 9000\n", "替换为空串应删除该段"
+        # 插：old=锚点，new=锚点+新内容
+        r = FW.execute(
+            {"path": str(f), "mode": "replace", "old_text": "PORT = 9000", "content": "PORT = 9000\nDEBUG = True"}
+        )
+        assert r.ok and f.read_text(encoding="utf-8") == 'PORT = 9000\nDEBUG = True\n', "锚点+新内容应完成插入"
+        # 0 匹配 → 报错
+        r = FW.execute({"path": str(f), "mode": "replace", "old_text": "不存在的段落", "content": "x"})
+        assert not r.ok and "未找到" in r.error, "0 匹配应明确报错"
+        # 多匹配 → 报错（拒绝猜测）
+        f.write_text("dup\ndup\n", encoding="utf-8")
+        r = FW.execute({"path": str(f), "mode": "replace", "old_text": "dup", "content": "x"})
+        assert not r.ok and "2 处" in r.error, "多处匹配应报错并提示补上下文"
+        # old == new → 报错
+        r = FW.execute({"path": str(f), "mode": "replace", "old_text": "dup", "content": "dup"})
+        assert not r.ok, "相同内容应拒绝"
+        # 缺 old_text → 报错
+        r = FW.execute({"path": str(f), "mode": "replace", "content": "x"})
+        assert not r.ok and "old_text" in r.error, "replace 缺 old_text 应报错"
+        # 文件不存在 → 报错（replace 不自动建文件）
+        r = FW.execute({"path": str(Path(td) / "nope.txt"), "mode": "replace", "old_text": "a", "content": "b"})
+        assert not r.ok and "不存在" in r.error, "文件不存在应报错"
+        # CRLF 容错：\n 写的 old_text 也能命中 CRLF 文件
+        crlf = Path(td) / "crlf.txt"
+        crlf.write_bytes("a = 1\r\nb = 2\r\n".encode("utf-8"))
+        r = FW.execute({"path": str(crlf), "mode": "replace", "old_text": "a = 1", "content": "a = 100"})
+        assert r.ok and "a = 100" in crlf.read_text(encoding="utf-8"), "CRLF 文件应容忍 \\n 归一化匹配"
+        # 替换后 JSON 校验仍生效
+        j = Path(td) / "cfg.json"
+        j.write_text('{"port": 8000}', encoding="utf-8")
+        r = FW.execute({"path": str(j), "mode": "replace", "old_text": "8000", "content": "9000"})
+        assert r.ok and r.metadata["json_valid"] is True, "replace 后 JSON 仍应通过回读校验"
+        print("[9/9] file_write replace 精准编辑（改/删/插 + 唯一匹配 + CRLF 容错） 通过")
 
 
 def main():
@@ -179,7 +225,8 @@ def main():
     test_write_overwrite_append()
     test_write_json_validation()
     test_permission_rules()
-    print("\n✅ 全部通过：文件能力（多格式读取 + 安全写入 + 权限）可用")
+    test_write_replace()
+    print("\n✅ 全部通过：文件能力（多格式读取 + 安全写入 + replace 精准编辑 + 权限）可用")
 
 
 if __name__ == "__main__":

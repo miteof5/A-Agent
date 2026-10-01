@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **自主 ReAct 主循环**：手写实现，turn/step 双层循环 + 8 个事件扩展点（业务逻辑全部插件化，核心循环保持"瘦"）
-- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + 审批）、`ask_user` 人机交互
+- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、`ask_user` 人机交互
 - **权限沙箱两档**：`on-demand`（按需确认：普通命令放行 + 高危命令弹窗审批）/ `full-access`（全部允许）+ 命令作用解释
 - **插件微内核**：EventBus 四模式（emit / bail / parallel / waterfall），BasePlugin + AgentContext，可独立开发、按需加载、可替换
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
@@ -65,7 +65,7 @@ python -m src.main
 
 文件能力说明：
 - **读**：`file_view` 按文件头自动识别——文本（UTF-8→GB18030 回退，GBK 不乱码）/ PDF（pdfplumber 逐页）/ Word（python-docx 段落+表格）/ Excel（openpyxl 逐 sheet）；解析库缺失时对应格式返回说明文案
-- **写**：`file_write`（path/content/mode=overwrite|append）统一 UTF-8，写入后回读校验，JSON 内容额外校验；`on-demand` 模式下写文件弹窗审批（全量允许直接写入）
+- **写**：`file_write`（path/content/mode=overwrite|append|replace）统一 UTF-8，写入后回读校验，JSON 内容额外校验；`mode=replace` 精准编辑（old_text 定位、唯一匹配才替换，覆盖改/删/插，对齐 Claude Code Edit 工具设计）；`on-demand` 模式下写文件弹窗审批（全量允许直接写入）
 
 模型生效优先级：**显式 `AA_LLM_MODEL` > 上次切换持久化（`.current_model`）> 代码默认值 > 清单第一个**。
 
@@ -97,7 +97,7 @@ python -m src.main
 | 文档 | 内容 |
 |---|---|
 | `项目状态-交接文档.md` | 当前进度 / 决策记录 / 踩坑记录（新对话先读它） |
-| `接口契约-S0.md` | REST / SSE / 数据模型契约（v1.10，含模型清单/切换/文件能力） |
+| `接口契约-S0.md` | REST / SSE / 数据模型契约（v1.11，含模型清单/切换/文件能力/replace 精准编辑） |
 | `开发预案-全栈实施路线.md` | 实施顺序与方法论（活预案） |
 | `项目规划-v0.3-精炼版.md` | 架构定稿（四层模型 / 微内核 / 插件拆分） |
 | `S5-硬化上线-任务规划.md` | S5 硬化规划 + 部署方案（含桌面一键启动） |
@@ -110,6 +110,6 @@ python -m src.main
 - ✅ 滚动记忆压缩 + Token 标识：三层短期记忆 + 实时消耗显示（**已完成**）
 - ✅ 长期记忆（S5）：提炼→去重→注入 全链路（**已完成**）
 - ✅ 检索注入（S5.1）：FTS5 关键词命中 + 活跃度兜底（**已完成**）
-- ✅ 文件能力（S5.3）：file_view 多格式读取（PDF/Word/Excel/GBK）+ file_write 安全写入（**已完成**）
+- ✅ 文件能力（S5.3）：file_view 多格式读取（PDF/Word/Excel/GBK）+ file_write 安全写入 + replace 精准编辑（**已完成**）
 - ⏸ 部署：health 检查 + 一键启动脚本（方案已定，用户暂停）
 - 🔜 补强方向：文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆
