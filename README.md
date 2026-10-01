@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **自主 ReAct 主循环**：手写实现，turn/step 双层循环 + 8 个事件扩展点（业务逻辑全部插件化，核心循环保持"瘦"）
-- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、文件查看、`ask_user` 人机交互
+- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + 审批）、`ask_user` 人机交互
 - **权限沙箱两档**：`on-demand`（按需确认：普通命令放行 + 高危命令弹窗审批）/ `full-access`（全部允许）+ 命令作用解释
 - **插件微内核**：EventBus 四模式（emit / bail / parallel / waterfall），BasePlugin + AgentContext，可独立开发、按需加载、可替换
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
@@ -25,8 +25,9 @@
 | Web | FastAPI（端口 8000） |
 | 主循环 | 手写 ReAct（不用 LangGraph） |
 | 插件 | 自研微内核（借鉴 Cordis / DSH 思想） |
-| 存储 | SQLite（事件溯源 append-only） |
+| 存储 | SQLite（事件溯源 append-only + 长期记忆 FTS5） |
 | LLM | OpenAI 兼容接口（默认阿里云百炼），`models.txt` 清单多模型热切换 |
+| 文件解析 | pdfplumber（PDF）/ python-docx（Word）/ openpyxl（Excel），可选依赖缺库降级 |
 | 前端 | 单文件 HTML（原生 JS + EventSource） |
 
 ## 快速开始
@@ -37,6 +38,8 @@ conda create -n ActionAgent python=3.12
 
 # 2. 安装依赖
 pip install -r requirements.txt
+# 文件解析库（可选，缺库时 PDF/docx/xlsx 读取返回说明文案，不影响其他功能）
+pip install pdfplumber python-docx openpyxl
 
 # 3. 配置 LLM（从环境变量读取）
 $env:AA_LLM_API_KEY = "sk-xxx"          # 或系统变量 DASHSCOPE_API_KEY
@@ -58,7 +61,11 @@ python -m src.main
 - `AA_REPEAT_SOFT_LIMIT` / `AA_REPEAT_HARD_LIMIT`（3/3）
 - `AA_MEMORY_FULL_TURNS`（5，完整上下文保留轮数）· `AA_MEMORY_SUMMARY_CHUNK`（10，攒满多少条触发总结）· `AA_MEMORY_SUMMARY_CHARS`（400，摘要字数上限）
 - `AA_LONG_MEMORY_INJECT_LIMIT`（5，每次注入的长期记忆条数）· `AA_LONG_MEMORY_MAX_CHARS`（100，每条注入字数上限）· `AA_LONG_MEMORY_SCHEMA`（JSON，可选覆写主题语义：分类/提炼规则/注入标题，缺省键保留默认）
-- `AA_TOOL_MAX_BYTES`（65536）
+- `AA_TOOL_MAX_BYTES`（65536，file_view/file_write 共用输出/写入上限）
+
+文件能力说明：
+- **读**：`file_view` 按文件头自动识别——文本（UTF-8→GB18030 回退，GBK 不乱码）/ PDF（pdfplumber 逐页）/ Word（python-docx 段落+表格）/ Excel（openpyxl 逐 sheet）；解析库缺失时对应格式返回说明文案
+- **写**：`file_write`（path/content/mode=overwrite|append）统一 UTF-8，写入后回读校验，JSON 内容额外校验；`on-demand` 模式下写文件弹窗审批（全量允许直接写入）
 
 模型生效优先级：**显式 `AA_LLM_MODEL` > 上次切换持久化（`.current_model`）> 代码默认值 > 清单第一个**。
 
@@ -68,7 +75,7 @@ python -m src.main
 ├── src/
 │   ├── kernel/          # 微内核：EventBus / BasePlugin / AgentContext
 │   ├── plugins/         # permission / sse_relay / event_store / repeat_guard / tool_registry
-│   ├── tools/           # shell_run / file_view / ask_user
+│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ ask_user
 │   ├── static/          # index.html 单文件前端（含模型管理视图）
 │   ├── main.py          # 启动入口
 │   ├── api.py           # REST 路由 + SSE 事件流
@@ -90,7 +97,7 @@ python -m src.main
 | 文档 | 内容 |
 |---|---|
 | `项目状态-交接文档.md` | 当前进度 / 决策记录 / 踩坑记录（新对话先读它） |
-| `接口契约-S0.md` | REST / SSE / 数据模型契约（v1.5，含模型清单/切换） |
+| `接口契约-S0.md` | REST / SSE / 数据模型契约（v1.10，含模型清单/切换/文件能力） |
 | `开发预案-全栈实施路线.md` | 实施顺序与方法论（活预案） |
 | `项目规划-v0.3-精炼版.md` | 架构定稿（四层模型 / 微内核 / 插件拆分） |
 | `S5-硬化上线-任务规划.md` | S5 硬化规划 + 部署方案（含桌面一键启动） |
@@ -103,5 +110,6 @@ python -m src.main
 - ✅ 滚动记忆压缩 + Token 标识：三层短期记忆 + 实时消耗显示（**已完成**）
 - ✅ 长期记忆（S5）：提炼→去重→注入 全链路（**已完成**）
 - ✅ 检索注入（S5.1）：FTS5 关键词命中 + 活跃度兜底（**已完成**）
-- ⏸ S5.3：部署（health 检查 + 一键启动脚本，方案已定）
+- ✅ 文件能力（S5.3）：file_view 多格式读取（PDF/Word/Excel/GBK）+ file_write 安全写入（**已完成**）
+- ⏸ 部署：health 检查 + 一键启动脚本（方案已定，用户暂停）
 - 🔜 补强方向：文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆

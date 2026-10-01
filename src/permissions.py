@@ -147,6 +147,17 @@ class PermissionPolicy:
         if tool_name == "file_view":
             return ApprovalOutcome.ALLOWED, ""
 
+        # file_write（S5.3）：修改性操作——on-demand 弹窗审批，full-access 放行
+        if tool_name == "file_write":
+            if mode == SandboxMode.FULL_ACCESS:
+                return ApprovalOutcome.ALLOWED, ""
+            target = (arguments.get("path") or "").strip()
+            return (
+                ApprovalOutcome.NEEDS_APPROVAL,
+                f"检测到写文件操作，需要用户审批：{target[:120] or '（未知路径）'}。"
+                f"批准后写入，拒绝则跳过；也可切换全部允许（full-access）免审批",
+            )
+
         # shell_run：按模式判断
         if tool_name == "shell_run":
             command = (arguments.get("command") or "").strip()

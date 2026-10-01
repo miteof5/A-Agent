@@ -47,7 +47,7 @@ class PermissionPlugin(BasePlugin):
         if outcome == ApprovalOutcome.ALLOWED:
             return None
         if outcome == ApprovalOutcome.NEEDS_APPROVAL:
-            return self._ask_approval(arguments, sandbox_mode)
+            return self._ask_approval(tool_name, arguments, sandbox_mode)
         logger.warning("权限拒绝 tool=%s sandbox=%s reason=%s", tool_name, sandbox_mode, reason)
         return ToolResult(
             ok=False,
@@ -57,8 +57,11 @@ class PermissionPlugin(BasePlugin):
             metadata={"policy": sandbox_mode},
         )
 
-    def _ask_approval(self, arguments: dict, sandbox_mode: str) -> ToolResult | None:
-        """S3.5：高危命令审批弹窗。返回 None=放行执行；ToolResult(is_denied)=拒绝跳过。"""
+    def _ask_approval(self, tool_name: str, arguments: dict, sandbox_mode: str) -> ToolResult | None:
+        """S3.5/S5.3：高危操作审批弹窗（shell 危险命令 / file_write 写文件）。
+
+        返回 None=放行执行；ToolResult(is_denied)=拒绝跳过。
+        """
         ctx = self.ctx
         if ctx is None or ctx.human_input is None:
             return ToolResult(
@@ -67,9 +70,18 @@ class PermissionPlugin(BasePlugin):
                 error="没有可用的用户审批通道（任务未挂起或已结束）",
                 is_denied=True,
             )
-        command = (arguments.get("command") or "").strip()
-        desc = describe_danger(command)  # S3.5：命令人话解释（如"删除文件（目标：xxx.txt）"）
-        question = f"检测到高危操作，是否批准执行？\n\n命令作用：{desc}\n命令：{command}\n\n（批准执行 / 拒绝）"
+        if tool_name == "file_write":
+            target = (arguments.get("path") or "").strip() or "（未知路径）"
+            desc = f"写文件（目标：{target}）"
+            question = (
+                f"检测到写文件操作，是否批准执行？\n\n"
+                f"操作：{desc}\n路径：{target}\n"
+                f"（批准执行 / 拒绝）"
+            )
+        else:
+            command = (arguments.get("command") or "").strip()
+            desc = describe_danger(command)  # S3.5：命令人话解释（如"删除文件（目标：xxx.txt）"）
+            question = f"检测到高危操作，是否批准执行？\n\n命令作用：{desc}\n命令：{command}\n\n（批准执行 / 拒绝）"
         logger.warning("高危审批等待 task_id=%s desc=%s", ctx.human_input.task_id, desc)
         ctx.events.emit(
             "agent/ask",

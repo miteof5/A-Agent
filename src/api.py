@@ -38,6 +38,7 @@ from .runtime import TaskManager, TaskRun
 from .storage import Storage
 from .tools.ask_user import AskUserTool
 from .tools.file_view import FileViewTool
+from .tools.file_write import FileWriteTool
 from .tools.shell_run import ShellRunTool
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
     kernel = AgentContext(config=config, storage=storage)
     tools: dict = {
         "file_view": FileViewTool(max_bytes=config.tool_output_max_bytes),
+        "file_write": FileWriteTool(max_bytes=config.tool_output_max_bytes),  # S5.3：写文本文件（on-demand 审批）
         "shell_run": ShellRunTool(max_bytes=config.tool_output_max_bytes),
         "ask_user": AskUserTool(kernel),  # S3.3：澄清通道（经 ctx.human_input 等待回答）
     }

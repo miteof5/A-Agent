@@ -199,7 +199,7 @@ def test_search_and_inject():
         m1 = st.create_memory("project_fact", "项目端口是 8000，models.txt 在根目录", "models.txt 端口")
         m2 = st.create_memory("user_profile", "用户偏好中文交流", "中文")
         # ① FTS 索引与 memory 表同步（create 后触发器已写入）
-        n_fts = st._execute("SELECT count(*) FROM memory_fts").fetchone()[0]
+        n_fts = st._fetchone("SELECT count(*) FROM memory_fts")[0]
         assert n_fts == len(st.list_memory()), "FTS 索引应与 memory 同步"
         # ② 数字检索词命中（输入含 8000 → 命中端口记忆）
         rows = retrieve_memories_for_task(st, CFG, "服务跑在 8000 端口，帮我看看")

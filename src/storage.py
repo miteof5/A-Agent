@@ -27,8 +27,19 @@ class Storage:
         self._init_schema()
 
     def _execute(self, sql: str, params=()):
+        """兼容层：锁内 execute，返回 cursor（旧调用）。新代码请用 _fetchone/_fetchall。"""
         with self._lock:
             return self._conn.execute(sql, params)
+
+    def _fetchall(self, sql: str, params=()):
+        """锁内 execute + fetchall：cursor 生命周期不出锁，多线程共享连接安全。"""
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
+
+    def _fetchone(self, sql: str, params=()):
+        """锁内 execute + fetchone：cursor 生命周期不出锁，多线程共享连接安全。"""
+        with self._lock:
+            return self._conn.execute(sql, params).fetchone()
 
     def _init_schema(self) -> None:
         with self._lock, self._conn:
@@ -190,7 +201,7 @@ class Storage:
             return cur.rowcount > 0
 
     def get_memory(self, memory_id: int) -> dict | None:
-        row = self._execute("SELECT * FROM memory WHERE id = ?", (memory_id,)).fetchone()
+        row = self._fetchone("SELECT * FROM memory WHERE id = ?", (memory_id,))
         return dict(row) if row else None
 
     def list_memory(self, category: str | None = None, include_inactive: bool = False, limit: int | None = None) -> list[dict]:
@@ -208,14 +219,14 @@ class Storage:
         if limit:
             sql += " LIMIT ?"
             params.append(limit)
-        return [dict(r) for r in self._execute(sql, params).fetchall()]
+        return [dict(r) for r in self._fetchall(sql, params)]
 
     def retrieve_memories(self, limit: int = 5) -> list[dict]:
         """检索要注入的活跃记忆：按活跃度排序（最近被用过 > 最近更新），取 top N。
 
         作为关键词检索（search_memories）的兜底通道。
         """
-        rows = self._execute(
+        rows = self._fetchall(
             """
             SELECT * FROM memory
             WHERE status = 'active'
@@ -223,7 +234,7 @@ class Storage:
             LIMIT ?
             """,
             (limit,),
-        ).fetchall()
+        )
         return [dict(r) for r in rows]
 
     def search_memories(self, query_terms: list[str], limit: int = 10) -> list[dict]:
@@ -237,7 +248,7 @@ class Storage:
         if not terms:
             return []
         match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
-        rows = self._execute(
+        rows = self._fetchall(
             """
             SELECT m.* FROM memory_fts f
             JOIN memory m ON m.id = f.rowid
@@ -246,7 +257,7 @@ class Storage:
             LIMIT ?
             """,
             (match, limit),
-        ).fetchall()
+        )
         return [dict(r) for r in rows]
 
     def touch_memory(self, memory_id: int) -> None:
@@ -321,9 +332,9 @@ class Storage:
             self._conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE task_id = ?", values)
 
     def get_task(self, task_id: str) -> Task | None:
-        row = self._execute(
+        row = self._fetchone(
             "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
-        ).fetchone()
+        )
         if row is None:
             return None
         return Task(
@@ -364,7 +375,7 @@ class Storage:
             )
 
     def list_steps(self, task_id: str, offset: int = 0, limit: int = 100) -> list[dict]:
-        rows = self._execute(
+        rows = self._fetchall(
             """
             SELECT turn_index, step_index, llm_thought, tool_name,
                    tool_arguments, tool_result, status, timestamp
@@ -372,7 +383,7 @@ class Storage:
             ORDER BY id LIMIT ? OFFSET ?
             """,
             (task_id, limit, offset),
-        ).fetchall()
+        )
         result = []
         for row in rows:
             item = {
@@ -389,26 +400,26 @@ class Storage:
         return result
 
     def count_steps(self, task_id: str) -> int:
-        row = self._execute(
+        row = self._fetchone(
             "SELECT COUNT(*) AS n FROM steps WHERE task_id = ?", (task_id,)
-        ).fetchone()
+        )
         return int(row["n"])
 
     # ---------- 任务列表（S3.6 对话界面：左侧会话列表） ----------
 
     def list_tasks(self, limit: int = 100, offset: int = 0) -> list[dict]:
         """按最近更新倒序返回任务列表（精简字段，供会话列表展示）。"""
-        rows = self._execute(
+        rows = self._fetchall(
             """
             SELECT task_id, content, state, created_at, updated_at, sandbox_mode
             FROM tasks ORDER BY updated_at DESC LIMIT ? OFFSET ?
             """,
             (limit, offset),
-        ).fetchall()
+        )
         return [dict(r) for r in rows]
 
     def count_tasks(self) -> int:
-        row = self._execute("SELECT COUNT(*) AS n FROM tasks").fetchone()
+        row = self._fetchone("SELECT COUNT(*) AS n FROM tasks")
         return int(row["n"])
 
     # ---------- events（S4.1 事件溯源：短期记忆持久化） ----------
@@ -443,19 +454,19 @@ class Storage:
 
         rowid 为次级排序：历史脏数据（同 seq 重复，服务重启导致）按插入顺序稳定重建。
         """
-        rows = self._execute(
+        rows = self._fetchall(
             "SELECT seq, type, payload FROM events WHERE task_id = ? ORDER BY seq, rowid",
             (task_id,),
-        ).fetchall()
+        )
         return [
             {"seq": r["seq"], "type": r["type"], "payload": json.loads(r["payload"])}
             for r in rows
         ]
 
     def count_events(self, task_id: str) -> int:
-        row = self._execute(
+        row = self._fetchone(
             "SELECT COUNT(*) AS n FROM events WHERE task_id = ?", (task_id,)
-        ).fetchone()
+        )
         return int(row["n"])
 
     def delete_task(self, task_id: str) -> None:
