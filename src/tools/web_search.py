@@ -29,7 +29,7 @@ _PROMPT_FRAGMENT = """使用 web_search 工具的时机与规则（S5.4）：
 - 结果只是线索不是结论：重要事实要基于多个来源交叉验证；来源冲突时在回答里说明。
 - 回答中必须带上链接引用（来源 URL），不得只转述摘要不给出处。
 - 若搜索返回"代理不可用"类错误：先直接重试一次 web_search（工具会自动重新拉起代理并测试）；
-  仍失败才告知用户手动打开代理工具。不要用 shell_run 去查找/启动代理程序（那是多余弯路）。"""
+  仍失败则告知用户手动打开代理工具。"""
 
 
 class WebSearchTool(BaseTool):
@@ -77,13 +77,6 @@ class WebSearchTool(BaseTool):
                 error="未配置搜索 API Key（AA_SEARCH_API_KEY）。请在项目根 .env 中填写后重试。",
             )
 
-        # 顺带回收空闲超时的自拉代理（不影响本次搜索）
-        if self.proxy_manager is not None:
-            try:
-                self.proxy_manager.release_idle()
-            except Exception:  # noqa: BLE001 - 回收失败不影响搜索
-                pass
-
         payload = {
             "query": query,
             "max_results": max_results,
@@ -99,13 +92,10 @@ class WebSearchTool(BaseTool):
                         ok=False,
                         content="",
                         error="代理全部不可用（已自动尝试拉起 Clash/v2rayN 但未就绪）。"
-                        "请先重试一次本搜索（工具会自动重新拉起代理）；仍失败才告知用户手动打开代理工具，"
-                        "不要用 shell 手动处理代理。",
+                        "请先重试一次本搜索（工具会自动重新拉起代理）；仍失败则告知用户。",
                     )
             try:
                 text = self._call_tavily(payload, proxy_url)
-                if self.proxy_manager is not None:
-                    self.proxy_manager.mark_used()
                 return ToolResult(ok=True, content=text)
             except _TransientError as e:
                 logger.warning("web_search 第 %d 次请求失败：%s", attempt + 1, e)

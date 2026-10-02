@@ -36,7 +36,7 @@ _PROMPT_FRAGMENT = """使用 web_fetch 工具的时机与规则（S5.5）：
 - 传入的 URL 应来自搜索结果"链接"字段或用户明确提供；只抓 http/https。
 - 正文默认压缩为中文摘要（max_chars 默认 400）；回答引用该链接时必须注明来源 URL。
 - 若返回"代理不可用"类错误：先直接重试一次 web_fetch（工具会自动重新拉起代理并测试）；
-  仍失败才告知用户手动打开代理工具。不要用 shell_run 去查找/启动代理程序。
+  仍失败则告知用户手动打开代理工具。
 - 抓取失败（目标非网页/超 2MB）时如实告知用户，不要编造内容。
 - 需要对比多个来源时，逐个 web_fetch 精读后再下结论。"""
 
@@ -82,13 +82,6 @@ class WebFetchTool(BaseTool):
         max_chars = int(arguments.get("max_chars") or 400)
         max_chars = max(100, min(max_chars, 2000))
 
-        # 顺带回收空闲超时的自拉代理（不影响本次抓取）
-        if self.proxy_manager is not None:
-            try:
-                self.proxy_manager.release_idle()
-            except Exception:  # noqa: BLE001 - 回收失败不影响抓取
-                pass
-
         # 主请求 + 一次故障转移重试
         for attempt in (0, 1):
             proxy_url = None
@@ -99,13 +92,10 @@ class WebFetchTool(BaseTool):
                         ok=False,
                         content="",
                         error="代理全部不可用（已自动尝试拉起 Clash/v2rayN 但未就绪）。"
-                        "请先重试一次本抓取（工具会自动重新拉起代理）；仍失败才告知用户手动打开代理工具，"
-                        "不要用 shell 手动处理代理。",
+                        "请先重试一次本抓取（工具会自动重新拉起代理）；仍失败则告知用户。",
                     )
             try:
                 title, body = self._fetch_text(url, proxy_url)
-                if self.proxy_manager is not None:
-                    self.proxy_manager.mark_used()
                 return self._render(title, url, body, max_chars)
             except _TransientError as e:
                 logger.warning("web_fetch 第 %d 次请求失败：%s", attempt + 1, e)

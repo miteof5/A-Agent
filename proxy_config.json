@@ -15,6 +15,5 @@
       "exe": "C:\\MyApp\\v2rayN\\v2rayN.exe"
     }
   ],
-  "idle_timeout_sec": 300,
   "startup_wait_sec": 15
 }

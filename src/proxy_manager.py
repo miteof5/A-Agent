@@ -1,12 +1,14 @@
-"""代理管理层（S5.4 联网）：Clash 优先 / v2rayN 兜底 / 自动拉起 / 空闲超时关闭。
+"""代理管理层（S5.4 联网）：Clash 优先 / v2rayN 兜底 / 自动拉起 / 故障转移。
 
 设计（2026-10-03 与用户拍板）：
 - 候选按序探测：Clash（HTTP 7890）→ v2rayN（SOCKS5 10808）。端口通 ≠ 可用，
   必须做真实 HTTP 连通测试（节点失效也会被识别），第一个测通的即当前代理。
 - 拉起：候选未运行 → subprocess 启动其 GUI 程序 → 轮询等端口就绪（≤ startup_wait_sec）。
 - 故障转移：当前代理请求失败时 failover() 强制切到下一个候选。
-- 关闭策略：只有"agent 自己拉起的"才在空闲超时（默认 5 分钟）后关闭；
-  用户手动运行的（启动时端口已在监听）绝不主动关，避免干扰用户正在使用的代理。
+- 关闭策略：**不做自动关闭**（2026-10-03 晚拍板取消"空闲 5 分钟自动关闭"）——
+  每次启动本质会弹出代理工具 GUI，用户习惯手动关闭；agent 只负责拉起，不负责关。
+  注意：被用户手动关闭后，_launched 里的死 pid 记录会被 _prune_dead/_launch_if_needed
+  清理并重新拉起，联网不会因此静默失效。
 - 敏感信息：本模块只有端口/路径（无 key），proxy_config.json 可提交 git。
 """
 
@@ -40,7 +42,6 @@ _DEFAULT_CONFIG = {
             "exe": r"C:\MyApp\v2rayN\v2rayN.exe",
         },
     ],
-    "idle_timeout_sec": 300,
     "startup_wait_sec": 15,
 }
 
@@ -49,22 +50,20 @@ _PROBE_URL = "https://www.google.com/generate_204"
 
 
 class ProxyManager:
-    """代理生命周期与故障转移。
-
-    线程安全：ensure/failover/mark_used/release_idle 可跨线程调用
-    （web_search 主线程执行，release_idle 顺带在每次搜索前检查）。
-    """
+    """代理探测、自动拉起与故障转移（线程安全：ensure/failover 可跨线程调用）。"""
 
     def __init__(self, config_path: str | None = None):
         self.cfg = _load_config(config_path)
         self._lock = threading.Lock()
-        self._launched: dict[str, int] = {}  # name -> 自己拉起的进程 pid（供空闲关闭）
-        self._last_used = 0.0
+        self._launched: dict[str, int] = {}  # name -> 自己拉起的进程 pid（仅用于死记录清理判断）
         self._preferred = 0  # 当前优先候选索引；failover 时 +1
 
     # ---- 对外 API ----
     def ensure_proxy(self) -> str | None:
-        """返回当前可用代理 URL（http://... 或 socks5://...）；全部不可用返回 None。"""
+        """返回当前可用代理 URL（http://... 或 socks5://...）；全部不可用返回 None。
+
+        每次联网调用都会执行：清理已死拉起记录 → 按序探测/拉起 → 连通测试。
+        """
         self._prune_dead()  # 先清掉已退出进程的记录（用户手动关闭等），避免"误以为已拉起"
         n = len(self.cfg["proxies"])
         if n == 0:
@@ -74,7 +73,6 @@ class ProxyManager:
             url = self._try_proxy(idx)
             if url:
                 self._preferred = idx
-                self._mark_used()
                 return url
         return None
 
@@ -84,29 +82,7 @@ class ProxyManager:
             self._preferred = (self._preferred + 1) % len(self.cfg["proxies"])
         return self.ensure_proxy()
 
-    def mark_used(self) -> None:
-        self._mark_used()
-
-    def release_idle(self) -> None:
-        """空闲超时关闭"自己拉起的"代理；用户手动开的绝不关。"""
-        with self._lock:
-            if not self._launched:
-                return
-            idle = time.time() - self._last_used
-            timeout = self.cfg.get("idle_timeout_sec", 300)
-            if idle < timeout:
-                return
-            for name, pid in list(self._launched.items()):
-                if _pid_alive(pid):
-                    _kill_tree(pid)
-                    logger.info("代理空闲超时已关闭：%s (pid=%d, 空闲 %.0fs)", name, pid, idle)
-                self._launched.pop(name, None)
-
     # ---- 内部 ----
-    def _mark_used(self) -> None:
-        with self._lock:
-            self._last_used = time.time()
-
     def _prune_dead(self) -> None:
         """清掉 _launched 中进程已退出的记录（用户手动关闭代理等场景）。
 
@@ -134,7 +110,7 @@ class ProxyManager:
         return url
 
     def _launch_if_needed(self, idx: int, p: dict) -> None:
-        """候选未运行 → 启动其 GUI 程序并轮询等端口就绪；记录 pid 供空闲关闭。
+        """候选未运行 → 启动其 GUI 程序并轮询等端口就绪；记录 pid 供死记录清理。
 
         注意：_launched 里记录的 pid 若已退出（如用户手动关闭代理），必须清除记录
         并重新拉起——否则会误以为"已拉起过"而跳过，联网能力静默失效。
@@ -208,16 +184,3 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
-
-
-def _kill_tree(pid: int) -> None:
-    """按 PID 杀整个进程树（agent 自己拉起的 GUI + 内核子进程）。"""
-    try:
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("关闭代理进程失败 pid=%d：%s", pid, e)
