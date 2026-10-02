@@ -75,7 +75,7 @@ python -m src.main
 联网能力说明（S5.4 + S5.5）：
 - **搜**：`web_search`（query + max_results≤10）→ Tavily API，返回标题/链接/来源/摘要（每条摘要截断 200 字），只读、两档权限均放行、回答须带链接引用
 - **读**：`web_fetch`（url + max_chars）精读网页正文——标准库 HTMLParser 提取（优先 article/main、跳过 nav/header/footer 噪声），**长正文自动走压缩小模型**（`compress_text`，默认压到 400 字内；短正文直接返回不浪费调用），响应体限 2MB；与 web_search 配合构成"搜索→精读"完整链路
-- **代理链路**：`src/proxy_manager.py` + `proxy_config.json`（可提交）——Clash（HTTP 7890）优先、v2rayN（SOCKS5 10808）兜底；候选未运行自动拉起、真实连通测试（端口通≠可用）、当前失效自动 failover；**只关闭 agent 自己拉起的**代理（用户手动开的绝不关），空闲 5 分钟超时自动关闭
+- **代理链路**：`src/proxy_manager.py` + `proxy_config.json`（可提交）——Clash（HTTP 7890）优先、v2rayN（SOCKS5 10808）兜底；**每次联网前自动探测/拉起**（候选未运行即拉起 GUI 并等端口就绪）、真实连通测试（端口通≠可用）、当前失效自动 failover；**不做自动关闭**（拉起会弹出代理工具窗口，由用户手动关闭；被手动关闭后下次联网会自动重新拉起）
 - **压缩小模型**：`AA_SUMM_*` 配置，未设置回退主模型；记忆压缩（summarize）与网页正文压缩（compress_text）共用此通道
 
 模型生效优先级：**显式 `AA_LLM_MODEL` > 上次切换持久化（`.current_model`）> 代码默认值 > 清单第一个**。
