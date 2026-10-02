@@ -35,7 +35,9 @@ _PROMPT_FRAGMENT = """使用 web_fetch 工具的时机与规则（S5.5）：
 - web_search 只给线索（标题/摘要/链接）；需要核实或精读某个链接的正文时调用 web_fetch（走代理抓取）。
 - 传入的 URL 应来自搜索结果"链接"字段或用户明确提供；只抓 http/https。
 - 正文默认压缩为中文摘要（max_chars 默认 400）；回答引用该链接时必须注明来源 URL。
-- 抓取失败（代理不可用/目标非网页/超 2MB）时如实告知用户，不要编造内容。
+- 若返回"代理不可用"类错误：先直接重试一次 web_fetch（工具会自动重新拉起代理并测试）；
+  仍失败才告知用户手动打开代理工具。不要用 shell_run 去查找/启动代理程序。
+- 抓取失败（目标非网页/超 2MB）时如实告知用户，不要编造内容。
 - 需要对比多个来源时，逐个 web_fetch 精读后再下结论。"""
 
 
@@ -96,7 +98,9 @@ class WebFetchTool(BaseTool):
                     return ToolResult(
                         ok=False,
                         content="",
-                        error="代理全部不可用（Clash/v2rayN 均未运行且拉起失败）。请检查代理工具后重试。",
+                        error="代理全部不可用（已自动尝试拉起 Clash/v2rayN 但未就绪）。"
+                        "请先重试一次本抓取（工具会自动重新拉起代理）；仍失败才告知用户手动打开代理工具，"
+                        "不要用 shell 手动处理代理。",
                     )
             try:
                 title, body = self._fetch_text(url, proxy_url)

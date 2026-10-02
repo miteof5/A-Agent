@@ -65,6 +65,7 @@ class ProxyManager:
     # ---- 对外 API ----
     def ensure_proxy(self) -> str | None:
         """返回当前可用代理 URL（http://... 或 socks5://...）；全部不可用返回 None。"""
+        self._prune_dead()  # 先清掉已退出进程的记录（用户手动关闭等），避免"误以为已拉起"
         n = len(self.cfg["proxies"])
         if n == 0:
             return None
@@ -106,6 +107,18 @@ class ProxyManager:
         with self._lock:
             self._last_used = time.time()
 
+    def _prune_dead(self) -> None:
+        """清掉 _launched 中进程已退出的记录（用户手动关闭代理等场景）。
+
+        关键：不清理的话 ensure_proxy 会以为"之前拉起的还在"，跳过重新拉起，
+        导致用户退出代理后联网能力一直失败（2026-10-03 实测踩坑）。
+        """
+        with self._lock:
+            dead = [name for name, pid in self._launched.items() if not _pid_alive(pid)]
+            for name in dead:
+                logger.info("代理进程已退出，清除拉起记录：%s", name)
+                self._launched.pop(name, None)
+
     def _try_proxy(self, idx: int) -> str | None:
         p = self.cfg["proxies"][idx]
         url = _proxy_url(p)
@@ -121,10 +134,17 @@ class ProxyManager:
         return url
 
     def _launch_if_needed(self, idx: int, p: dict) -> None:
-        """候选未运行 → 启动其 GUI 程序并轮询等端口就绪；记录 pid 供空闲关闭。"""
+        """候选未运行 → 启动其 GUI 程序并轮询等端口就绪；记录 pid 供空闲关闭。
+
+        注意：_launched 里记录的 pid 若已退出（如用户手动关闭代理），必须清除记录
+        并重新拉起——否则会误以为"已拉起过"而跳过，联网能力静默失效。
+        """
         with self._lock:
-            if p["name"] in self._launched:
-                return
+            old_pid = self._launched.get(p["name"])
+            if old_pid is not None:
+                if _pid_alive(old_pid):
+                    return  # 之前拉起的进程还活着，等端口就绪即可
+                self._launched.pop(p["name"], None)  # 已退出 → 清记录，重新拉起
             exe = p.get("exe", "")
             if not exe or not Path(exe).exists():
                 return

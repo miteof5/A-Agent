@@ -28,7 +28,8 @@ _PROMPT_FRAGMENT = """使用 web_search 工具的时机与规则（S5.4）：
 - 搜索前把问题拆成 1~3 个精确关键词（不要整段照抄）；一次搜索通常够，必要时分多次。
 - 结果只是线索不是结论：重要事实要基于多个来源交叉验证；来源冲突时在回答里说明。
 - 回答中必须带上链接引用（来源 URL），不得只转述摘要不给出处。
-- 搜索失败（代理不可用/无 key）时明确告知用户，不要假装查到了。"""
+- 若搜索返回"代理不可用"类错误：先直接重试一次 web_search（工具会自动重新拉起代理并测试）；
+  仍失败才告知用户手动打开代理工具。不要用 shell_run 去查找/启动代理程序（那是多余弯路）。"""
 
 
 class WebSearchTool(BaseTool):
@@ -97,7 +98,9 @@ class WebSearchTool(BaseTool):
                     return ToolResult(
                         ok=False,
                         content="",
-                        error="代理全部不可用（Clash/v2rayN 均未运行且拉起失败）。请检查代理工具后重试。",
+                        error="代理全部不可用（已自动尝试拉起 Clash/v2rayN 但未就绪）。"
+                        "请先重试一次本搜索（工具会自动重新拉起代理）；仍失败才告知用户手动打开代理工具，"
+                        "不要用 shell 手动处理代理。",
                     )
             try:
                 text = self._call_tavily(payload, proxy_url)
