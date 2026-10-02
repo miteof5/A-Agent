@@ -11,6 +11,13 @@
     AA_MODELS_FILE    模型清单文件（默认 models.txt；换平台重写此文件即可）
     AA_DB_PATH        SQLite 文件路径（默认项目根目录 actionagent.db）
 
+S5.4 联网能力（敏感信息一律走 .env，禁止写进代码/git）：
+    AA_SEARCH_API_KEY   搜索 API Key（Tavily；.env 里配置，不提交）
+    AA_SEARCH_BASE_URL  搜索 API 地址（默认 https://api.tavily.com）
+    AA_SUMM_API_KEY     压缩小模型 Key（可选；未设置回退 AA_LLM_API_KEY）
+    AA_SUMM_BASE_URL    压缩小模型接口（可选；未设置回退 AA_LLM_BASE_URL）
+    AA_SUMM_MODEL       压缩小模型名（可选；未设置回退主模型——换小模型只改这一个变量）
+
 模型生效优先级（模型切换功能）：
     显式 AA_LLM_MODEL > 上次切换持久化（.current_model，随 db 目录）> DEFAULT_MODEL（下方代码常量，可直接改）> models.txt 清单第一个
 """
@@ -24,7 +31,33 @@ from pathlib import Path
 
 from .model_registry import first_model, load_current_model, load_models
 
+
+def _load_dotenv() -> None:
+    """启动时读取项目根目录 .env（若存在），注入 os.environ（不覆盖已有变量）。
+
+    key 不进代码、不进 git（.gitignore 已排除 .env）；缺失时静默跳过。
+    """
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if not env_file.exists():
+        return
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_SEARCH_BASE_URL = "https://api.tavily.com"
 # 默认模型（用户可直接改这里，或改用环境变量 AA_LLM_MODEL 覆盖）
 DEFAULT_MODEL = "deepseek-v4-flash-0731"
 DEFAULT_MODELS_FILE = "models.txt"
@@ -69,6 +102,13 @@ class Config:
         default_factory=lambda: dict(DEFAULT_LONG_MEMORY_SCHEMA)
     )
     db_path: str = "actionagent.db"
+    # S5.4 联网：搜索 API（key 一律走 .env / 环境变量，不进代码）
+    search_api_key: str = ""
+    search_base_url: str = DEFAULT_SEARCH_BASE_URL
+    # S5.4 压缩小模型：未显式设置时回退主 LLM 配置（换小模型只改 AA_SUMM_MODEL）
+    summ_api_key: str = ""
+    summ_base_url: str = ""
+    summ_model: str = ""
 
 
 def load_config() -> Config:
@@ -85,9 +125,15 @@ def load_config() -> Config:
     if not model:
         model = first_model(load_models(models_file)) or ""
 
+    llm_base_url = os.getenv("AA_LLM_BASE_URL", DEFAULT_BASE_URL)
+    # 压缩小模型：显式设置优先，否则回退主模型三件套（key/base_url/model）
+    summ_model = os.getenv("AA_SUMM_MODEL", "").strip() or model
+    summ_base_url = os.getenv("AA_SUMM_BASE_URL", "").strip() or llm_base_url
+    summ_api_key = os.getenv("AA_SUMM_API_KEY", "").strip() or api_key
+
     return Config(
         llm_api_key=api_key,
-        llm_base_url=os.getenv("AA_LLM_BASE_URL", DEFAULT_BASE_URL),
+        llm_base_url=llm_base_url,
         llm_model=model,
         max_steps_per_turn=int(os.getenv("AA_MAX_STEPS", "50")),
         max_llm_calls_per_session=int(os.getenv("AA_MAX_LLM_CALLS", "200")),
@@ -102,6 +148,11 @@ def load_config() -> Config:
         long_memory_max_chars=int(os.getenv("AA_LONG_MEMORY_MAX_CHARS", "100")),
         long_memory_schema=_load_long_memory_schema(),
         db_path=db_path,
+        search_api_key=os.getenv("AA_SEARCH_API_KEY", "").strip(),
+        search_base_url=os.getenv("AA_SEARCH_BASE_URL", DEFAULT_SEARCH_BASE_URL).strip(),
+        summ_api_key=summ_api_key,
+        summ_base_url=summ_base_url,
+        summ_model=summ_model,
     )
 
 

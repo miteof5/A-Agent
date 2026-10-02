@@ -40,6 +40,8 @@ from .tools.ask_user import AskUserTool
 from .tools.file_view import FileViewTool
 from .tools.file_write import FileWriteTool
 from .tools.shell_run import ShellRunTool
+from .tools.web_search import WebSearchTool
+from .proxy_manager import ProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +117,13 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
 
     # ---- 微内核组装（S2.4）----
     kernel = AgentContext(config=config, storage=storage)
+    proxy_manager = ProxyManager()  # S5.4：代理管理层（Clash 优先/v2rayN 兜底/自动拉起/空闲关闭）
     tools: dict = {
         "file_view": FileViewTool(max_bytes=config.tool_output_max_bytes),
         "file_write": FileWriteTool(max_bytes=config.tool_output_max_bytes),  # S5.3：写文本文件（on-demand 审批）
         "shell_run": ShellRunTool(max_bytes=config.tool_output_max_bytes),
         "ask_user": AskUserTool(kernel),  # S3.3：澄清通道（经 ctx.human_input 等待回答）
+        "web_search": WebSearchTool(config, proxy_manager),  # S5.4：联网搜索（只读，两档放行）
     }
     kernel.plugins.register(ToolRegistryPlugin(tools))
     kernel.plugins.register(PermissionPlugin(PermissionPolicy()))
