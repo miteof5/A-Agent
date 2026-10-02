@@ -44,6 +44,19 @@ def _usage_dict(usage) -> dict | None:
     }
 
 
+def _check_key_ascii(key: str, var: str) -> None:
+    """Key 含非 ASCII（多半是 .env 里未替换的示例占位符，如"sk-你的key"）→ 明确报错。
+
+    这类占位符会拼进 Authorization 头，httpx 对非 ASCII 头值直接抛难以理解的编码错误，
+    这里提前给出可操作的提示。
+    """
+    if any(ord(c) > 127 for c in key):
+        raise ValueError(
+            f"{var} 包含非 ASCII 字符（可能是未替换的示例占位符）。"
+            "请在项目根 .env 中填写真实的 API Key（形如 sk-xxx）。"
+        )
+
+
 @dataclass
 class LLMCall:
     """一次 LLM 响应的结构化结果"""
@@ -70,6 +83,7 @@ class LLMClient:
                 raise ValueError(
                     "缺少 AA_LLM_API_KEY。请设置环境变量后重试（如 $env:AA_LLM_API_KEY='sk-xxx'）。"
                 )
+            _check_key_ascii(self.config.llm_api_key, "AA_LLM_API_KEY")
             from openai import OpenAI
 
             self._client = OpenAI(api_key=self.config.llm_api_key, base_url=self.config.llm_base_url)
@@ -83,6 +97,7 @@ class LLMClient:
                     "缺少压缩模型 Key（AA_SUMM_API_KEY 或 AA_LLM_API_KEY）。"
                     "请设置环境变量后重试。"
                 )
+            _check_key_ascii(self.config.summ_api_key, "AA_SUMM_API_KEY")
             from openai import OpenAI
 
             self._summ_client = OpenAI(

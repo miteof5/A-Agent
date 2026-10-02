@@ -151,6 +151,10 @@ class PermissionPolicy:
         if tool_name == "web_search":
             return ApprovalOutcome.ALLOWED, ""
 
+        # web_fetch（S5.5）：只读无副作用（仅抓取网页正文），两档都放行
+        if tool_name == "web_fetch":
+            return ApprovalOutcome.ALLOWED, ""
+
         # file_write（S5.3）：修改性操作——on-demand 弹窗审批，full-access 放行
         if tool_name == "file_write":
             if mode == SandboxMode.FULL_ACCESS:
