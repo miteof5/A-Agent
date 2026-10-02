@@ -1,0 +1,20 @@
+{
+  "proxies": [
+    {
+      "name": "clash",
+      "type": "http",
+      "host": "127.0.0.1",
+      "port": 7890,
+      "exe": "C:\\MyApp\\Clash.for.Windows-0.20.16-ikuuu\\Clash for Windows.exe"
+    },
+    {
+      "name": "v2rayN",
+      "type": "socks5",
+      "host": "127.0.0.1",
+      "port": 10808,
+      "exe": "C:\\MyApp\\v2rayN\\v2rayN.exe"
+    }
+  ],
+  "idle_timeout_sec": 300,
+  "startup_wait_sec": 15
+}

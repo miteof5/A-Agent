@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **自主 ReAct 主循环**：手写实现，turn/step 双层循环 + 8 个事件扩展点（业务逻辑全部插件化，核心循环保持"瘦"）
-- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、`ask_user` 人机交互
+- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、**联网搜索**（web_search：Tavily + 自动代理 Clash/v2rayN 故障转移 + 空闲回收）、`ask_user` 人机交互
 - **权限沙箱两档**：`on-demand`（按需确认：普通命令放行 + 高危命令弹窗审批）/ `full-access`（全部允许）+ 命令作用解释
 - **插件微内核**：EventBus 四模式（emit / bail / parallel / waterfall），BasePlugin + AgentContext，可独立开发、按需加载、可替换
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
@@ -41,9 +41,12 @@ pip install -r requirements.txt
 # 文件解析库（可选，缺库时 PDF/docx/xlsx 读取返回说明文案，不影响其他功能）
 pip install pdfplumber python-docx openpyxl
 
-# 3. 配置 LLM（从环境变量读取）
+# 3. 配置 LLM（从环境变量读取；也可复制 `.env.example` 为 `.env` 填写，二者等效）
 $env:AA_LLM_API_KEY = "sk-xxx"          # 或系统变量 DASHSCOPE_API_KEY
 $env:AA_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# 3.5 联网搜索（可选；不配则 web_search 不可用，其余功能不受影响）
+$env:AA_SEARCH_API_KEY = "tvly-xxx"     # Tavily API Key（https://tavily.com 注册）
 
 # 4. 启动
 python -m src.main
@@ -62,10 +65,17 @@ python -m src.main
 - `AA_MEMORY_FULL_TURNS`（5，完整上下文保留轮数）· `AA_MEMORY_SUMMARY_CHUNK`（10，攒满多少条触发总结）· `AA_MEMORY_SUMMARY_CHARS`（400，摘要字数上限）
 - `AA_LONG_MEMORY_INJECT_LIMIT`（5，每次注入的长期记忆条数）· `AA_LONG_MEMORY_MAX_CHARS`（100，每条注入字数上限）· `AA_LONG_MEMORY_SCHEMA`（JSON，可选覆写主题语义：分类/提炼规则/注入标题，缺省键保留默认）
 - `AA_TOOL_MAX_BYTES`（65536，file_view/file_write 共用输出/写入上限）
+- `AA_SEARCH_API_KEY`（Tavily Key，联网搜索）· `AA_SEARCH_BASE_URL`（搜索 API 地址，默认 `https://api.tavily.com`）
+- `AA_SUMM_MODEL` / `AA_SUMM_BASE_URL` / `AA_SUMM_API_KEY`（压缩小模型三件套，**不填自动复用主模型**；换小模型只改 `AA_SUMM_MODEL`）
 
 文件能力说明：
 - **读**：`file_view` 按文件头自动识别——文本（UTF-8→GB18030 回退，GBK 不乱码）/ PDF（pdfplumber 逐页）/ Word（python-docx 段落+表格）/ Excel（openpyxl 逐 sheet）；解析库缺失时对应格式返回说明文案
 - **写**：`file_write`（path/content/mode=overwrite|append|replace）统一 UTF-8，写入后回读校验，JSON 内容额外校验；`mode=replace` 精准编辑（old_text 定位、唯一匹配才替换，覆盖改/删/插，对齐 Claude Code Edit 工具设计）；`on-demand` 模式下写文件弹窗审批（全量允许直接写入）
+
+联网能力说明（S5.4）：
+- **搜**：`web_search`（query + max_results≤10）→ Tavily API，返回标题/链接/来源/摘要（每条摘要截断 200 字），只读、两档权限均放行、回答须带链接引用
+- **代理链路**：`src/proxy_manager.py` + `proxy_config.json`（可提交）——Clash（HTTP 7890）优先、v2rayN（SOCKS5 10808）兜底；候选未运行自动拉起、真实连通测试（端口通≠可用）、当前失效自动 failover；**只关闭 agent 自己拉起的**代理（用户手动开的绝不关），空闲 5 分钟超时自动关闭
+- **压缩小模型**：`AA_SUMM_*` 配置，未设置回退主模型；记忆压缩（summarize）与网页正文压缩（compress_text）共用此通道
 
 模型生效优先级：**显式 `AA_LLM_MODEL` > 上次切换持久化（`.current_model`）> 代码默认值 > 清单第一个**。
 
@@ -75,7 +85,8 @@ python -m src.main
 ├── src/
 │   ├── kernel/          # 微内核：EventBus / BasePlugin / AgentContext
 │   ├── plugins/         # permission / sse_relay / event_store / repeat_guard / tool_registry
-│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ ask_user
+│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ ask_user
+│   ├── proxy_manager.py # S5.4 代理管理层：Clash 优先/v2rayN 兜底/自动拉起/空闲关闭
 │   ├── static/          # index.html 单文件前端（含模型管理视图）
 │   ├── main.py          # 启动入口
 │   ├── api.py           # REST 路由 + SSE 事件流
@@ -86,7 +97,7 @@ python -m src.main
 │   ├── memory.py        # 滚动记忆压缩（三层摘要 + 触发/重建）
 │   ├── storage.py       # SQLite（tasks/steps/events + 长期记忆 memory 表）
 │   ├── long_memory.py   # S5 长期记忆：价值过滤 + 提炼落库 + 注入块
-│   └── llm_client.py    # OpenAI 兼容客户端（流式 + usage + set/verify_model + summarize + extract_memories）
+│   └── llm_client.py    # OpenAI 兼容客户端（流式 + usage + set/verify_model + summarize/compress_text + extract_memories）
 ├── tests/               # RepeatGuard + 模型切换 + 长期记忆测试（FakeLLM，无需真实 Key）
 ├── models.txt           # 可用模型清单（按厂商分组、多模态最后；换平台重写此文件）
 └── *.md                 # 规划 / 契约 / 交接文档（见下）
@@ -111,5 +122,6 @@ python -m src.main
 - ✅ 长期记忆（S5）：提炼→去重→注入 全链路（**已完成**）
 - ✅ 检索注入（S5.1）：FTS5 关键词命中 + 活跃度兜底（**已完成**）
 - ✅ 文件能力（S5.3）：file_view 多格式读取（PDF/Word/Excel/GBK）+ file_write 安全写入 + replace 精准编辑（**已完成**）
+- ✅ 联网能力（S5.4）：web_search（Tavily）+ 自动代理（Clash 优先/v2rayN 兜底/拉起/空闲关闭）+ 压缩小模型通道（**已完成**；待填 AA_SEARCH_API_KEY 实测）
 - ⏸ 部署：health 检查 + 一键启动脚本（方案已定，用户暂停）
-- 🔜 补强方向：文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆
+- 🔜 补强方向：web_fetch 正文精读（小模型压缩）→ 文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆

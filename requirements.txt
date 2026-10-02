@@ -6,6 +6,9 @@ openai>=1.40
 # 测试（tests/test_smoke.py）
 httpx>=0.27
 
+# 联网能力（S5.4）：httpx[socks] 提供 SOCKS5 代理支持（v2rayN 兜底链路）
+httpx[socks]>=0.27
+
 # 文件能力（S5.3）：file_view 多格式读取（可选，缺库时对应格式返回说明文案）
 pdfplumber>=0.11
 python-docx>=1.1

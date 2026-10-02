@@ -61,6 +61,8 @@ class LLMClient:
         self.config = config
         self.model = config.llm_model
         self._client = None
+        # S5.4：压缩专用小模型客户端（AA_SUMM_* 配置；未显式设置时回退主模型三件套）
+        self._summ_client = None
 
     def _get_client(self):
         if self._client is None:
@@ -72,6 +74,22 @@ class LLMClient:
 
             self._client = OpenAI(api_key=self.config.llm_api_key, base_url=self.config.llm_base_url)
         return self._client
+
+    def _get_summ_client(self):
+        """压缩小模型客户端（记忆压缩/网页正文压缩用；与主模型 key/base_url 相互独立）。"""
+        if self._summ_client is None:
+            if not self.config.summ_api_key:
+                raise ValueError(
+                    "缺少压缩模型 Key（AA_SUMM_API_KEY 或 AA_LLM_API_KEY）。"
+                    "请设置环境变量后重试。"
+                )
+            from openai import OpenAI
+
+            self._summ_client = OpenAI(
+                api_key=self.config.summ_api_key,
+                base_url=self.config.summ_base_url,
+            )
+        return self._summ_client
 
     # ---- 模型切换（模型名运行时热切换；base_url/key 不变时 client 无需重建）----
 
@@ -110,15 +128,16 @@ class LLMClient:
         """记忆压缩：把一批轮次的完整历史原文压缩成一段中文摘要。
 
         返回 (摘要文本, usage)。只做一次性投入——换取后续每轮不再重复上传这批原文。
+        S5.4：压缩统一走 AA_SUMM_* 小模型配置（未设置时回退主模型），换小模型只改配置。
         """
-        client = self._get_client()
+        client = self._get_summ_client()
         system = (
             "你是对话记忆压缩器。把用户提供的多轮 AI Agent 任务历史压缩成中文摘要："
             "保留每轮的用户要求、关键动作、最终结论；不要复述推理细节和工具输出；"
             f"整段控制在 {max_chars} 字以内。"
         )
         resp = client.chat.completions.create(
-            model=self.model,
+            model=self.config.summ_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": history_text},
@@ -127,6 +146,29 @@ class LLMClient:
         )
         text = (resp.choices[0].message.content or "").strip()
         return text, _usage_dict(getattr(resp, "usage", None)) or {}
+
+    def compress_text(self, text: str, purpose: str = "网页正文", max_chars: int = 400) -> tuple[str, dict]:
+        """通用文本压缩（S5.4）：网页正文等长文本 → 小模型摘要，主模型只见摘要。
+
+        与 summarize 的区别：summarize 面向"多轮对话历史"，compress_text 面向
+        "单段长文本"（如搜索结果页面正文），供未来 web_fetch 精读链路使用。
+        """
+        client = self._get_summ_client()
+        system = (
+            f"你是内容压缩器。把用户提供的{purpose}压缩成中文摘要："
+            "保留与主题直接相关的关键事实、数据、结论；剔除排版、导航、广告与重复内容；"
+            f"整段控制在 {max_chars} 字以内。只输出摘要正文，不要任何前后缀。"
+        )
+        resp = client.chat.completions.create(
+            model=self.config.summ_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.3,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        return out, _usage_dict(getattr(resp, "usage", None)) or {}
 
     def extract_memories(
         self,

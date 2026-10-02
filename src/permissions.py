@@ -147,6 +147,10 @@ class PermissionPolicy:
         if tool_name == "file_view":
             return ApprovalOutcome.ALLOWED, ""
 
+        # web_search（S5.4）：只读无副作用，两档都放行（联网查询不弹审批）
+        if tool_name == "web_search":
+            return ApprovalOutcome.ALLOWED, ""
+
         # file_write（S5.3）：修改性操作——on-demand 弹窗审批，full-access 放行
         if tool_name == "file_write":
             if mode == SandboxMode.FULL_ACCESS:
