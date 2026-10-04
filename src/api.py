@@ -19,6 +19,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles  # /vendor：前端第三方库静态挂载
 from pydantic import BaseModel, Field
 
 from .config import Config, load_config
@@ -50,6 +51,7 @@ logger = logging.getLogger(__name__)
 MAX_CONTENT_LEN = 10000  # 契约 §5：CONTENT_TOO_LONG 阈值
 
 INDEX_HTML = Path(__file__).parent / "static" / "index.html"
+VENDOR_DIR = Path(__file__).parent / "static" / "vendor"  # 前端第三方库（marked/DOMPurify，本地化）
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -324,6 +326,10 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
         save_current_model(name, base_dir=Path(config.db_path).parent)  # 持久化，重启不丢
         logger.info("模型切换成功 name=%s", name)
         return {"current": name}
+
+    # 前端第三方库（marked/DOMPurify）：本地化静态挂载，不依赖 CDN
+    if VENDOR_DIR.exists():
+        app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 
     return app
 

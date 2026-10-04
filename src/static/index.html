@@ -102,8 +102,28 @@
     align-self: flex-start; max-width: 900px; background: #fff;
     border: 1px solid #eceef1; border-radius: 16px 4px 16px 16px;
     padding: 10px 14px; font-size: 14px; line-height: 1.7;
-    white-space: pre-wrap; word-break: break-all;
+    word-break: break-word;
   }
+  /* Agent 回答的 Markdown 渲染样式（marked.js 输出，DOMPurify 已清洗） */
+  .msg-agent .md-body { font-size: 14px; line-height: 1.7; word-break: break-word; }
+  .msg-agent .md-body > :first-child { margin-top: 0; }
+  .msg-agent .md-body > :last-child { margin-bottom: 0; }
+  .msg-agent .md-body p { margin: 0.5em 0; }
+  .msg-agent .md-body h1, .msg-agent .md-body h2, .msg-agent .md-body h3, .msg-agent .md-body h4 { margin: 1em 0 0.4em; font-size: 1.08em; }
+  .msg-agent .md-body strong { font-weight: 600; }
+  .msg-agent .md-body code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-family: Consolas, "SF Mono", monospace; font-size: 12.5px; }
+  .msg-agent .md-body pre { background: #f6f8fa; border: 1px solid #e6e9f0; border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+  .msg-agent .md-body pre code { background: none; padding: 0; }
+  .msg-agent .md-body ul, .msg-agent .md-body ol { padding-left: 1.5em; margin: 0.5em 0; }
+  .msg-agent .md-body li { margin: 0.2em 0; }
+  .msg-agent .md-body blockquote { border-left: 3px solid #d1d5db; margin: 0.5em 0; padding: 2px 12px; color: #4b5563; }
+  .msg-agent .md-body table { border-collapse: collapse; margin: 0.5em 0; }
+  .msg-agent .md-body th, .msg-agent .md-body td { border: 1px solid #e5e7eb; padding: 6px 10px; }
+  .msg-agent .md-body a { color: #4d6bfe; text-decoration: none; }
+  .msg-agent .md-body a:hover { text-decoration: underline; }
+  .msg-agent .md-body hr { border: none; border-top: 1px solid #e5e7eb; margin: 1em 0; }
+  .msg-agent .md-body del { color: #9ca3af; }
+  .msg-agent .md-body input[type=checkbox] { margin-right: 4px; vertical-align: -2px; }
   /* 每轮过程容器（思考+工具一刀切折叠，S4.5） */
   .proc-box { align-self: flex-start; width: 92%; }
   .proc-toggle {
@@ -269,6 +289,9 @@
   .model-row.busy { opacity: .55; pointer-events: none; }
   .model-tip { font-size: 12px; color: #9ca3af; margin-top: 20px; }
 </style>
+<!-- Markdown 渲染（本地化，不依赖 CDN）：marked 渲染 + DOMPurify 防 XSS（模型输出不可信） -->
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
 </head>
 <body>
 <div id="toastBox"></div>
@@ -691,9 +714,23 @@ function addUserMsg(text) {
 function addAgentResult(text) {
   const div = document.createElement('div');
   div.className = 'msg-agent';
-  div.innerHTML = '<b style="color:#4d6bfe;">Agent</b><br>' + escapeHtml(text || '（无返回内容）');
+  // 2026-10-04：模型输出按 Markdown 渲染（marked + DOMPurify），星号/标题/列表/代码块正常显示
+  const body = document.createElement('div');
+  body.className = 'md-body';
+  body.innerHTML = renderMarkdown(text || '（无返回内容）');
+  div.innerHTML = '<b style="color:#4d6bfe;">Agent</b>';
+  div.appendChild(body);
   el.chatFlow.appendChild(div);
   scrollBottom();
+}
+/* 模型输出 → 安全 HTML：marked 解析（GFM：表格/删除线/任务列表）→ DOMPurify 清洗（防 XSS） */
+function renderMarkdown(text) {
+  if (!window.marked || !window.DOMPurify) return escapeHtml(text); // 库缺失时降级纯文本
+  try {
+    return DOMPurify.sanitize(marked.parse(text));
+  } catch (e) {
+    return escapeHtml(text);
+  }
 }
 function addAgentError(message) {
   const div = document.createElement('div');

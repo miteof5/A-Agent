@@ -59,7 +59,7 @@ _load_dotenv()
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_SEARCH_BASE_URL = "https://api.tavily.com"
 # 默认模型（用户可直接改这里，或改用环境变量 AA_LLM_MODEL 覆盖）
-DEFAULT_MODEL = "deepseek-v4-flash-0731"
+DEFAULT_MODEL = "qwen3.8-max"
 DEFAULT_MODELS_FILE = "models.txt"
 
 # S5 长期记忆：主题语义配置块（方案 A：机制通用、主题可插拔）。
