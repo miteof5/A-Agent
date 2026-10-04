@@ -43,36 +43,26 @@ def rebuild_messages(
     config = config or Config()
     if llm is not None:
         maybe_compact(storage, llm, task_id, config)  # 可能新增 memory/summary 事件
-    events = storage.list_events(task_id)
-    if not events:
+    # rebuild 优化（定向读取）：不整段拉会话历史——
+    #   - 窗口轮完整事件（最近 N 轮原文，第 1 层）
+    #   - 全部轮次的 user/done/error + memory/summary（Q+A 原料 + 摘要，均为小事件）
+    #     供 build_memory_block 组装第 2、3 层（done 已预存 question → Q+A 零遍历）
+    tr = storage.turn_range(task_id)
+    if tr is None:
         return None
-    memory_block = build_memory_block(events, config)  # 摘要块（第 2、3 层）
-
-    # 完整窗口：最近 memory_full_turns 轮（第 1 层）
-    turns = [
-        e["payload"].get("turn")
-        for e in events
-        if e["type"] != SUMMARY_EVENT and e["payload"].get("turn") is not None
-    ]
-    if not turns:
-        return None
-    full_start = max(min(turns), max(turns) - config.memory_full_turns + 1)
-    window_events = [
-        e for e in events
-        if e["type"] != SUMMARY_EVENT
-        and e["payload"].get("turn") is not None
-        and e["payload"]["turn"] >= full_start
-    ]
+    mn, mx = tr
+    full_start = max(mn, mx - config.memory_full_turns + 1)
+    window_events = storage.list_events(task_id, min_turn=full_start)
+    qa_events = storage.list_events(
+        task_id, types=["agent/user", "agent/done", "agent/error", SUMMARY_EVENT]
+    )
+    memory_block = build_memory_block(window_events + qa_events, config)  # 摘要块（第 2、3 层）
 
     messages: list[dict] = [
         {"role": "system", "content": build_system_prompt(tools)}
     ]
     # S5：续聊同样注入长期记忆块（按最近一轮用户输入检索相关条目，在短期记忆块之前）
-    last_user = ""
-    for e in reversed(events):
-        if e["type"] == "agent/user":
-            last_user = e["payload"].get("content") or ""
-            break
+    last_user = storage.last_user_content(task_id)
     long_block = build_long_memory_block(storage, config, user_input=last_user)
     if long_block:
         messages.append({"role": "system", "content": long_block})
