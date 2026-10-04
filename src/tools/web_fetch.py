@@ -82,12 +82,12 @@ class WebFetchTool(BaseTool):
         max_chars = int(arguments.get("max_chars") or 400)
         max_chars = max(100, min(max_chars, 2000))
 
-        # 主请求 + 一次故障转移重试
+        # 主请求 + 自动重试一次（网络/限流/服务端抖动等瞬态失败；内容类错误不重试）
         for attempt in (0, 1):
             proxy_url = None
             if self.proxy_manager is not None:
                 proxy_url = self.proxy_manager.ensure_proxy()
-                if proxy_url is None:
+                if proxy_url is None and attempt == 1:
                     return ToolResult(
                         ok=False,
                         content="",
@@ -99,9 +99,9 @@ class WebFetchTool(BaseTool):
                 return self._render(title, url, body, max_chars)
             except _TransientError as e:
                 logger.warning("web_fetch 第 %d 次请求失败：%s", attempt + 1, e)
-                if self.proxy_manager is None or attempt == 1:
+                if attempt == 1:
                     return ToolResult(ok=False, content="", error=f"抓取失败：{e}")
-                continue  # 切下一个代理再试一次
+                continue  # 自动重试一次（可切代理）
             except Exception as e:  # noqa: BLE001 - 内容类错误（非网页/超限等）不重试
                 return ToolResult(ok=False, content="", error=f"抓取失败：{e}")
         return ToolResult(ok=False, content="", error="抓取失败（已重试）")
@@ -115,6 +115,11 @@ class WebFetchTool(BaseTool):
             with httpx.Client(
                 proxy=proxy_url, timeout=20.0, follow_redirects=True, headers={"User-Agent": _UA}
             ) as client, client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    # 429 限流 / 5xx 服务端抖动 → 瞬态，自动重试一次；其他 4xx 不重试
+                    if resp.status_code in (429, 500, 502, 503, 504):
+                        raise _TransientError(f"目标站点返回 HTTP {resp.status_code}（服务端异常，可重试）")
+                    raise ValueError(f"目标站点返回 HTTP {resp.status_code}")
                 ctype = resp.headers.get("content-type", "").lower()
                 if "html" not in ctype and "text/plain" not in ctype:
                     raise ValueError(f"目标不是网页文本（Content-Type: {ctype or '未知'}），web_fetch 仅精读网页")

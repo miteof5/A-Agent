@@ -82,12 +82,12 @@ class WebSearchTool(BaseTool):
             "max_results": max_results,
             "search_depth": "basic",  # basic 省额度；摘要够用
         }
-        # 主请求 + 一次故障转移重试（当前代理失效 → 切下一个候选再试）
+        # 主请求 + 自动重试一次（网络/限流/服务端抖动等瞬态失败；key 等非瞬态不重试）
         for attempt in (0, 1):
             proxy_url = None
             if self.proxy_manager is not None:
                 proxy_url = self.proxy_manager.ensure_proxy()
-                if proxy_url is None:
+                if proxy_url is None and attempt == 1:
                     return ToolResult(
                         ok=False,
                         content="",
@@ -99,10 +99,9 @@ class WebSearchTool(BaseTool):
                 return ToolResult(ok=True, content=text)
             except _TransientError as e:
                 logger.warning("web_search 第 %d 次请求失败：%s", attempt + 1, e)
-                if self.proxy_manager is None or attempt == 1:
+                if attempt == 1:
                     return ToolResult(ok=False, content="", error=f"搜索请求失败：{e}")
-                # 切下一个代理再试一次
-                continue
+                continue  # 自动重试一次（可切代理）
             except Exception as e:  # noqa: BLE001 - key 无效等非瞬态错误，不重试
                 return ToolResult(ok=False, content="", error=f"搜索失败：{e}")
         return ToolResult(ok=False, content="", error="搜索请求失败（已重试）")
@@ -123,9 +122,12 @@ class WebSearchTool(BaseTool):
         except httpx.HTTPError as e:
             raise _TransientError(f"网络请求失败（代理 {proxy_url}）：{e}") from e
 
-        if resp.status_code == 401 or resp.status_code == 403:
+        if resp.status_code in (401, 403):
             raise ValueError(f"搜索 API Key 无效或额度不足（HTTP {resp.status_code}）")
         if resp.status_code != 200:
+            # 429 限流 / 5xx 服务端抖动 → 瞬态，自动重试一次；其他 4xx 不重试
+            if resp.status_code in (429, 500, 502, 503, 504):
+                raise _TransientError(f"搜索 API 服务端异常（HTTP {resp.status_code}）")
             raise ValueError(f"搜索 API 返回异常（HTTP {resp.status_code}）：{resp.text[:200]}")
 
         data = resp.json()
