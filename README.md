@@ -48,9 +48,11 @@ $env:AA_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 # 3.5 联网搜索（可选；不配则 web_search 不可用，其余功能不受影响）
 $env:AA_SEARCH_API_KEY = "tvly-xxx"     # Tavily API Key（https://tavily.com 注册）
 
-# 4. 启动
+# 4. 启动（推荐：桌面双击一键启动）
+# 双击「启动ActionAgent.bat」或桌面快捷方式：检查端口 → pythonw 后台起服务 → 自动开浏览器
+# 停止：双击「停止ActionAgent.bat」
 python -m src.main
-# 浏览器打开 http://127.0.0.1:8000
+# 浏览器打开 http://127.0.0.1:8000（手动启动方式，调试用）
 ```
 
 **模型切换（不用重启）**：浏览器左侧「⚙ 模型」→ 点选即切。模型清单在 `models.txt`（`#` 开头为厂商分组，多模态放最后）。
@@ -86,8 +88,8 @@ python -m src.main
 ├── src/
 │   ├── kernel/          # 微内核：EventBus / BasePlugin / AgentContext
 │   ├── plugins/         # permission / sse_relay / event_store / repeat_guard / tool_registry
-│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ ask_user
-│   ├── proxy_manager.py # S5.4 代理管理层：Clash 优先/v2rayN 兜底/自动拉起/空闲关闭
+│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ web_fetch（正文精读）/ ask_user
+│   ├── proxy_manager.py # S5.4 代理管理层：Clash 优先/v2rayN 兜底/自动拉起/故障转移（不做自动关闭）
 │   ├── static/          # index.html 单文件前端（含模型管理视图）
 │   ├── main.py          # 启动入口
 │   ├── api.py           # REST 路由 + SSE 事件流
@@ -100,6 +102,8 @@ python -m src.main
 │   ├── long_memory.py   # S5 长期记忆：价值过滤 + 提炼落库 + 注入块
 │   └── llm_client.py    # OpenAI 兼容客户端（流式 + usage + set/verify_model + summarize/compress_text + extract_memories）
 ├── tests/               # RepeatGuard + 模型切换 + 长期记忆测试（FakeLLM，无需真实 Key）
+├── launcher.py          # S5.6 一键启动/停止：端口检查 + pythonw 后台起服务 + 健康检查 + 自动开浏览器
+├── 启动ActionAgent.bat / 停止ActionAgent.bat  # 桌面双击入口（全 ASCII 内容，防 GBK 乱码）
 ├── models.txt           # 可用模型清单（按厂商分组、多模态最后；换平台重写此文件）
 └── *.md                 # 规划 / 契约 / 交接文档（见下）
 ```
@@ -123,6 +127,7 @@ python -m src.main
 - ✅ 长期记忆（S5）：提炼→去重→注入 全链路（**已完成**）
 - ✅ 检索注入（S5.1）：FTS5 关键词命中 + 活跃度兜底（**已完成**）
 - ✅ 文件能力（S5.3）：file_view 多格式读取（PDF/Word/Excel/GBK）+ file_write 安全写入 + replace 精准编辑（**已完成**）
-- ✅ 联网能力（S5.4 + S5.5）：web_search（Tavily）+ web_fetch 正文精读（长文走小模型压缩）+ 自动代理（Clash 优先/v2rayN 兜底/拉起/空闲关闭）（**已完成**）
-- ⏸ 部署：health 检查 + 一键启动脚本（方案已定，用户暂停）
+- ✅ 联网能力（S5.4 + S5.5）：web_search（Tavily）+ web_fetch 正文精读（长文走小模型压缩）+ 自动代理（Clash 优先/v2rayN 兜底/拉起/故障转移）（**已完成**）
+- ✅ 一键启动（S5.6）：桌面双击 bat + pythonw 后台 + 健康检查 + 自动开浏览器（**已完成**）
+- ⏸ 部署剩余：health 接口 + exe 打包（PyInstaller/pywebview，可选，方案已讨论）
 - 🔜 补强方向：文件快照回滚 → 浏览器自动化（Playwright）→ 鼠标键盘 GUI → 环境感知 → 长期记忆
