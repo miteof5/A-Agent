@@ -63,15 +63,22 @@ def _window_start(events: list[dict], config: Config) -> int:
 # ---- 第 2 层：逐轮 Q+A（规则提取，零 LLM 成本）----
 
 def _qa_of_turn(events: list[dict], turn: int) -> tuple[str | None, str | None]:
+    """取某一轮的"用户提问+最终结论"。
+
+    优先读写入时预存字段（agent/done payload.question，B 优化——命中即返回，零额外遍历）；
+    老数据无预存 → 兜底遍历现算（user/done/error 小事件已在定向读取的集合里）。
+    """
     question = result = None
     for e in events:
         p = e["payload"]
         if p.get("turn") != turn:
             continue
-        if e["type"] == "agent/user" and question is None:
-            question = p.get("content")
-        elif e["type"] == "agent/done" and result is None:
+        if e["type"] == "agent/done":
             result = p.get("result")
+            if p.get("question") is not None:  # B：写入时预存（新数据直接命中）
+                return p.get("question"), result
+        elif e["type"] == "agent/user" and question is None:
+            question = p.get("content")
         elif e["type"] == "agent/error" and result is None:
             result = "出错：" + str(p.get("message") or "")
     return question, result
@@ -196,31 +203,34 @@ def maybe_compact(storage, llm, task_id: str, config: Config) -> dict | None:
     二级压缩（摘要条数上限）：摘要已达 memory_summary_max_count 条 → 先把最老 2 条
     合并成粗摘要腾位置，再压新 chunk → 摘要条数恒 ≤ 上限。
 
+    rebuild 优化：全部走定向读取（summary 事件 / 轮次号聚合 / batch 轮原文），
+    不整段拉取会话历史。
+
     返回压缩结果 payload（含 turn_start/turn_end/text/input_tokens/output_tokens），
     未触发返回 None。任何失败（含重试耗尽）→ 记日志返回 None，绝不影响续聊主流程。
     """
     if not hasattr(llm, "summarize"):
         return None
     try:
-        events = storage.list_events(task_id)
-        if not events:
-            return None
-        covered = _covered_turns(events)
-        turns = _all_turns(events)
+        summaries = storage.list_events(task_id, types=[SUMMARY_EVENT])
+        turns = storage.all_turns(task_id)
         if not turns:
             return None
-        full_start = _window_start(events, config)
+        covered = _covered_turns(summaries)
+        full_start = max(turns[0], turns[-1] - config.memory_full_turns + 1)
         candidates = [t for t in turns if t < full_start and t not in covered]
         if len(candidates) < config.memory_summary_chunk:
             return None
         # 二级压缩：有效摘要条数已达上限 → 先合并最老 2 条（腾位置）；合并失败则本次放弃
-        if len(_effective_summaries(events)) >= config.memory_summary_max_count:
-            if _merge_oldest_summaries(storage, llm, task_id, events, config) is None:
+        if len(_effective_summaries(summaries)) >= config.memory_summary_max_count:
+            if _merge_oldest_summaries(storage, llm, task_id, summaries, config) is None:
                 logger.warning("记忆摘要合并失败 task_id=%s（跳过本次压缩，下次再试）", task_id)
                 return None
-            events = storage.list_events(task_id)  # 刷新（已新增粗摘要）
+            summaries = storage.list_events(task_id, types=[SUMMARY_EVENT])  # 刷新（已新增粗摘要）
         batch = candidates[: config.memory_summary_chunk]
-        history_text = _render_turns(events, set(batch))
+        # 定向读取 batch 轮完整原文（thought/tools/result/done/user），不拉全量
+        batch_events = storage.list_events(task_id, min_turn=batch[0], max_turn=batch[-1])
+        history_text = _render_turns(batch_events, set(batch))
         summary, usage = _call_with_retry(
             lambda: llm.summarize(history_text, max_chars=config.memory_summary_chars),
             config,

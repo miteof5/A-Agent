@@ -100,6 +100,11 @@ class Storage:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq)"
             )
+            # rebuild 优化（定向读取）：表达式索引按 payload.turn 过滤，避免全量读历史
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_task_turn "
+                "ON events(task_id, json_extract(payload, '$.turn'))"
+            )
             # S5：长期记忆表（跨会话稳定事实：用户画像/项目事实/用户目标）
             # 与 events 表分工：events=录像（只增不改），memory=笔记（可更新/失效）
             # occurred_at=事实发生时间（任务创建时间，区别于 created_at 入库时间：
@@ -467,19 +472,76 @@ class Storage:
                 (task_id, row["next_seq"], ev_type, json.dumps(payload, ensure_ascii=False), now_iso()),
             )
 
-    def list_events(self, task_id: str) -> list[dict]:
-        """按 (seq, rowid) 顺序返回任务的全部事件（payload 已反序列化）。
+    def list_events(
+        self,
+        task_id: str,
+        min_turn: int | None = None,
+        max_turn: int | None = None,
+        types: list[str] | None = None,
+    ) -> list[dict]:
+        """按 (seq, rowid) 顺序返回事件（payload 已反序列化）。
 
+        rebuild 优化（定向读取）：支持按 payload.turn 范围 / 事件类型过滤，
+        只取需要的部分，不再每次全量拉整个会话历史。
+        - min_turn / max_turn：按 json_extract(payload,'$.turn') 过滤
+          （memory/summary 无 turn 字段 → NULL，天然被范围条件排除）
+        - types：仅返回指定类型（如 ["memory/summary"]）
         rowid 为次级排序：历史脏数据（同 seq 重复，服务重启导致）按插入顺序稳定重建。
         """
-        rows = self._fetchall(
-            "SELECT seq, type, payload FROM events WHERE task_id = ? ORDER BY seq, rowid",
-            (task_id,),
-        )
+        sql = "SELECT seq, type, payload FROM events WHERE task_id = ?"
+        params: list = [task_id]
+        if types:
+            placeholders = ",".join("?" * len(types))
+            sql += f" AND type IN ({placeholders})"
+            params.extend(types)
+        if min_turn is not None:
+            sql += " AND json_extract(payload, '$.turn') >= ?"
+            params.append(min_turn)
+        if max_turn is not None:
+            sql += " AND json_extract(payload, '$.turn') <= ?"
+            params.append(max_turn)
+        sql += " ORDER BY seq, rowid"
+        rows = self._fetchall(sql, params)
         return [
             {"seq": r["seq"], "type": r["type"], "payload": json.loads(r["payload"])}
             for r in rows
         ]
+
+    def turn_range(self, task_id: str) -> tuple[int, int] | None:
+        """该任务非摘要事件的最小/最大轮次（聚合查询，不读全量 payload）。
+
+        返回 (min_turn, max_turn)；无事件返回 None。
+        """
+        row = self._fetchone(
+            "SELECT MIN(json_extract(payload, '$.turn')) AS mn, "
+            "MAX(json_extract(payload, '$.turn')) AS mx "
+            "FROM events WHERE task_id = ? AND type != 'memory/summary'",
+            (task_id,),
+        )
+        if row is None or row["mn"] is None:
+            return None
+        return int(row["mn"]), int(row["mx"])
+
+    def all_turns(self, task_id: str) -> list[int]:
+        """该任务全部轮次号（升序去重，DISTINCT 聚合，轻量——不读 payload 正文）。"""
+        rows = self._fetchall(
+            "SELECT DISTINCT json_extract(payload, '$.turn') AS t FROM events "
+            "WHERE task_id = ? AND type != 'memory/summary' "
+            "AND json_extract(payload, '$.turn') IS NOT NULL ORDER BY t",
+            (task_id,),
+        )
+        return [int(r["t"]) for r in rows]
+
+    def last_user_content(self, task_id: str) -> str:
+        """最新一条 agent/user 的 content（rebuild 取当前用户输入用，不全量遍历）。"""
+        row = self._fetchone(
+            "SELECT payload FROM events WHERE task_id = ? AND type = 'agent/user' "
+            "ORDER BY seq DESC, rowid DESC LIMIT 1",
+            (task_id,),
+        )
+        if row is None:
+            return ""
+        return json.loads(row["payload"]).get("content") or ""
 
     def count_events(self, task_id: str) -> int:
         row = self._fetchone(

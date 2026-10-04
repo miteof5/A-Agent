@@ -331,7 +331,7 @@ class Reactor:
             self.storage.update_task(
                 task_id, state=TaskState.DONE, turn=start_turn, step=step + 1, result=final
             )
-            emit("agent/done", {"result": final})
+            emit("agent/done", {"result": final, "question": content})
             logger.info("任务完成 step=%d result=%r", step + 1, final[:100])
             # S5：长期记忆异步提炼（不阻塞主流程；失败只记日志，绝不影响任务结果）
             try:
