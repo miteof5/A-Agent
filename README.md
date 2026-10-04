@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **自主 ReAct 主循环**：手写实现，turn/step 双层循环 + 8 个事件扩展点（业务逻辑全部插件化，核心循环保持"瘦"）
-- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、**联网**（web_search 搜索线索 + web_fetch 正文精读，自动代理 Clash/v2rayN 故障转移 + 空闲回收）、`ask_user` 人机交互
+- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、**联网**（web_search 搜索线索 + web_fetch 正文精读，自动代理 Clash/v2rayN 故障转移 + 失败自动重试一次）、`ask_user` 人机交互
 - **权限沙箱两档**：`on-demand`（按需确认：普通命令放行 + 高危命令弹窗审批）/ `full-access`（全部允许）+ 命令作用解释
 - **插件微内核**：EventBus 四模式（emit / bail / parallel / waterfall），BasePlugin + AgentContext，可独立开发、按需加载、可替换
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
@@ -55,12 +55,12 @@ python -m src.main
 # 浏览器打开 http://127.0.0.1:8000（手动启动方式，调试用）
 ```
 
-**模型切换（不用重启）**：浏览器左侧「⚙ 模型」→ 点选即切。模型清单在 `models.txt`（`#` 开头为厂商分组，多模态放最后）。
+**模型切换（不用重启，切换即持久化）**：浏览器左侧「⚙ 模型」→ 点选即切；切换自动写入 `.current_model`，**重启后保持上次选择**（额度用尽换模型只需切一次）。模型清单在 `models.txt`（`#` 开头为厂商分组，多模态放最后）。
 
 **换平台**：改 `AA_LLM_BASE_URL` / `AA_LLM_API_KEY` + 重写 `models.txt`，其他代码零改动。
 
 环境变量覆盖（可选）：
-- `AA_LLM_MODEL`（显式指定模型，优先级最高）
+- `AA_LLM_MODEL`（显式固定模型，优先级最高；**建议留空**——填了会每次启动压过 UI 切换的持久化选择）
 - `AA_MODELS_FILE`（模型清单文件，默认 `models.txt`）
 - `AA_DB_PATH`（SQLite 路径）· `AA_MAX_STEPS`（50）· `AA_MAX_LLM_CALLS`（200）
 - `AA_REPEAT_SOFT_LIMIT` / `AA_REPEAT_HARD_LIMIT`（3/3）
@@ -75,7 +75,7 @@ python -m src.main
 - **写**：`file_write`（path/content/mode=overwrite|append|replace）统一 UTF-8，写入后回读校验，JSON 内容额外校验；`mode=replace` 精准编辑（old_text 定位、唯一匹配才替换，覆盖改/删/插，对齐 Claude Code Edit 工具设计）；`on-demand` 模式下写文件弹窗审批（全量允许直接写入）
 
 联网能力说明（S5.4 + S5.5）：
-- **搜**：`web_search`（query + max_results≤10）→ Tavily API，返回标题/链接/来源/摘要（每条摘要截断 200 字），只读、两档权限均放行、回答须带链接引用
+- **搜**：`web_search`（query + max_results≤10）→ Tavily API，返回标题/链接/来源/摘要（每条摘要截断 200 字），只读、两档权限均放行、回答须带链接引用；**失败自动重试一次**（限流 429 / 服务端 5xx / 网络抖动自动重试；key 无效不重试）
 - **读**：`web_fetch`（url + max_chars）精读网页正文——标准库 HTMLParser 提取（优先 article/main、跳过 nav/header/footer 噪声），**长正文自动走压缩小模型**（`compress_text`，默认压到 400 字内；短正文直接返回不浪费调用），响应体限 2MB；与 web_search 配合构成"搜索→精读"完整链路
 - **代理链路**：`src/proxy_manager.py` + `proxy_config.json`（可提交）——Clash（HTTP 7890）优先、v2rayN（SOCKS5 10808）兜底；**每次联网前自动探测/拉起**（候选未运行即拉起 GUI 并等端口就绪）、真实连通测试（端口通≠可用）、当前失效自动 failover；**不做自动关闭**（拉起会弹出代理工具窗口，由用户手动关闭；被手动关闭后下次联网会自动重新拉起）
 - **压缩小模型**：`AA_SUMM_*` 配置，未设置回退主模型；记忆压缩（summarize）与网页正文压缩（compress_text）共用此通道
