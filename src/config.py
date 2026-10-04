@@ -97,8 +97,8 @@ class Config:
     memory_summary_chunk: int = 10  # 滚动记忆：逐轮 Q+A 攒满多少条触发一次 LLM 总结
     memory_summary_chars: int = 400  # 滚动记忆：每条 LLM 摘要字数上限
     memory_summary_max_count: int = 5  # 滚动记忆（二级）：摘要条数上限，超了合并最老 2 条
-    memory_summary_retries: int = 3  # 滚动记忆：压缩 LLM 调用失败后的重试次数（指数退避）
-    memory_summary_retry_delay: int = 2  # 滚动记忆：首次重试等待秒数，每次翻倍（2s→4s→8s）
+    memory_summary_retries: int = 2  # 滚动记忆：压缩 LLM 调用失败后的重试次数（指数退避）
+    memory_summary_retry_delay: int = 2  # 滚动记忆：首次重试等待秒数，每次翻倍（2s→4s，最大等待 6s）
     long_memory_inject_limit: int = 5  # S5 长期记忆：每次注入的活跃记忆条数上限
     long_memory_max_chars: int = 100  # S5 长期记忆：每条注入内容的字数上限
     long_memory_schema: dict = field(  # S5 长期记忆：主题语义配置（默认通用三类，可整体覆写）
@@ -148,7 +148,7 @@ def load_config() -> Config:
         memory_summary_chunk=int(os.getenv("AA_MEMORY_SUMMARY_CHUNK", "10")),
         memory_summary_chars=int(os.getenv("AA_MEMORY_SUMMARY_CHARS", "400")),
         memory_summary_max_count=int(os.getenv("AA_MEMORY_SUMMARY_MAX_COUNT", "5")),
-        memory_summary_retries=int(os.getenv("AA_MEMORY_SUMMARY_RETRIES", "3")),
+        memory_summary_retries=int(os.getenv("AA_MEMORY_SUMMARY_RETRIES", "2")),
         memory_summary_retry_delay=int(os.getenv("AA_MEMORY_SUMMARY_RETRY_DELAY", "2")),
         long_memory_inject_limit=int(os.getenv("AA_LONG_MEMORY_INJECT_LIMIT", "5")),
         long_memory_max_chars=int(os.getenv("AA_LONG_MEMORY_MAX_CHARS", "100")),

@@ -13,7 +13,7 @@
 - **便捷切换模型**：`models.txt` 清单（按厂商分组、多模态最后）+ 前端「⚙ 模型」管理视图，运行时热切换（base_url/api_key 不变，只换模型名）；切换前自动校验（额度/存在性），失败自动回滚；切换结果持久化，重启不丢
 - **前端（单文件）**：对话式界面（会话列表 / 思考过程折叠 / 审批卡 / 问答卡 / 日志面板 / 模型管理），SSE 流式 token + 状态轮询兜底；AI 回答按 **Markdown 渲染**（marked + DOMPurify 本地化，见「Markdown 渲染」节）
 - **长期记忆（S5）**：跨会话稳定事实存 SQLite `memory` 表——任务完成后**异步提炼**（价值过滤→LLM 提炼 add/update/skip，去重判断合并进同一次调用）→ 新任务开始时**检索注入** ≤5 条（S5.1：FTS5 关键词检索——标识符/数字/路径/≥3字中文子串命中，bm25 相关优先 + 活跃度兜底/补足；零命中退回活跃度）；宁缺毋滥，允许空提炼；**主题语义可插拔**：分类定义/提炼规则/注入标题收在 `LONG_MEMORY_SCHEMA`（换主题只改配置，机制零改动）
-- **滚动记忆压缩**：三层短期记忆——最近 5 轮完整原文 + 逐轮 Q+A 规则摘要 + 每 10 轮一次 LLM 段落摘要；**二级滚动摘要**（摘要上限 5 条，超限把最老 2 条合并为粗摘要，越老越粗、总量封顶；压缩调用失败 2/4/8s 指数退避重试，重试耗尽放弃、绝不阻塞续聊）；events 表全量保留原文，压缩只影响上传量；续聊时自动触发，上下文不随轮次线性膨胀
+- **滚动记忆压缩**：三层短期记忆——最近 5 轮完整原文 + 逐轮 Q+A 规则摘要 + 每 10 轮一次 LLM 段落摘要；**二级滚动摘要**（摘要上限 5 条，超限把最老 2 条合并为粗摘要，越老越粗、总量封顶；压缩调用失败 2/4s 指数退避重试（最多 2 次，最大等待 6s），重试耗尽放弃、绝不阻塞续聊）；events 表全量保留原文，压缩只影响上传量；续聊时自动触发，上下文不随轮次线性膨胀
 - **Token 消耗标识**：对话页实时显示「累计消耗 Σ + 本轮上传 ↑」（SSE 推送，即时更新），压缩时提示瘦身效果
 - **日志可观测**：标准 logging，`logs/agent.log` 10MB×5 轮转，`task=task-xxxx` 自动串联，uvicorn 日志同文件
 
@@ -66,7 +66,7 @@ python -m src.main
 - `AA_MODELS_FILE`（模型清单文件，默认 `models.txt`）
 - `AA_DB_PATH`（SQLite 路径）· `AA_MAX_STEPS`（50）· `AA_MAX_LLM_CALLS`（200）
 - `AA_REPEAT_SOFT_LIMIT` / `AA_REPEAT_HARD_LIMIT`（3/3）
-- `AA_MEMORY_FULL_TURNS`（5，完整上下文保留轮数）· `AA_MEMORY_SUMMARY_CHUNK`（10，攒满多少条触发总结）· `AA_MEMORY_SUMMARY_CHARS`（400，摘要字数上限）· `AA_MEMORY_SUMMARY_MAX_COUNT`（5，摘要条数上限，超限合并最老 2 条）· `AA_MEMORY_SUMMARY_RETRIES`（3，压缩调用重试次数）· `AA_MEMORY_SUMMARY_RETRY_DELAY`（2，首次重试等待秒数，每次翻倍）
+- `AA_MEMORY_FULL_TURNS`（5，完整上下文保留轮数）· `AA_MEMORY_SUMMARY_CHUNK`（10，攒满多少条触发总结）· `AA_MEMORY_SUMMARY_CHARS`（400，摘要字数上限）· `AA_MEMORY_SUMMARY_MAX_COUNT`（5，摘要条数上限，超限合并最老 2 条）· `AA_MEMORY_SUMMARY_RETRIES`（2，压缩调用重试次数）· `AA_MEMORY_SUMMARY_RETRY_DELAY`（2，首次重试等待秒数，每次翻倍）
 - `AA_LONG_MEMORY_INJECT_LIMIT`（5，每次注入的长期记忆条数）· `AA_LONG_MEMORY_MAX_CHARS`（100，每条注入字数上限）· `AA_LONG_MEMORY_SCHEMA`（JSON，可选覆写主题语义：分类/提炼规则/注入标题，缺省键保留默认）
 - `AA_TOOL_MAX_BYTES`（65536，file_view/file_write 共用输出/写入上限）
 - `AA_SEARCH_API_KEY`（Tavily Key，联网搜索）· `AA_SEARCH_BASE_URL`（搜索 API 地址，默认 `https://api.tavily.com`）

@@ -110,7 +110,7 @@ def _render_turns(events: list[dict], turns: set[int]) -> str:
 # ---- 压缩触发（续聊入口调用）----
 
 def _call_with_retry(fn, config: Config):
-    """压缩 LLM 调用重试：指数退避（2s→4s→8s…），重试耗尽后抛异常（由调用方兜底）。
+    """压缩 LLM 调用重试：指数退避（2s→4s，共重试 2 次，最大等待 6s），重试耗尽后抛异常（由调用方兜底）。
 
     同步等待只在真失败时发生（正常一次成功零延迟）；重试次数/退避基数可配置。
     """
