@@ -112,11 +112,14 @@ def extract_and_store(storage, llm, task_id: str, config: Config) -> list[dict] 
                 if isinstance(kw, list):
                     kw = " ".join(str(x) for x in kw)
                 if action == "add":
+                    # occurred_at=任务创建时间（对话发生时间）——事实时间，区别于入库时间：
+                    #   延迟提炼时 created_at 可能晚于对话当天，给模型看会失真
                     rid = storage.create_memory(
                         c.get("category") or "",
                         c.get("content") or "",
                         keywords=kw,
                         source="auto",
+                        occurred_at=task.created_at,
                     )
                     if rid:
                         applied += 1
@@ -183,7 +186,10 @@ def build_long_memory_block(storage, config: Config, user_input: str = "") -> st
         if not content:
             continue
         content = content[: config.long_memory_max_chars]
-        parts.append(f"- [{m['category']}] {content}")
+        # 带事实日期（YYYY-MM-DD，取自 occurred_at）；旧数据无 occurred_at → 不显示日期（宁缺毋滥，避免入库时间误导）
+        occurred = (m.get("occurred_at") or "").strip()
+        date_tag = f"（{occurred[:10]}）" if len(occurred) >= 10 else ""
+        parts.append(f"- [{m['category']}]{date_tag} {content}")
         storage.touch_memory(m["id"])
     if len(parts) == 1:
         return None

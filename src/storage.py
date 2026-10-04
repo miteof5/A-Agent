@@ -102,6 +102,8 @@ class Storage:
             )
             # S5：长期记忆表（跨会话稳定事实：用户画像/项目事实/用户目标）
             # 与 events 表分工：events=录像（只增不改），memory=笔记（可更新/失效）
+            # occurred_at=事实发生时间（任务创建时间，区别于 created_at 入库时间：
+            #   提炼在任务后延迟入库，入库时间可能晚于事实发生时间，给模型看会失真）
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory (
@@ -110,6 +112,7 @@ class Storage:
                     content      TEXT NOT NULL,
                     keywords     TEXT DEFAULT '',
                     source       TEXT DEFAULT 'auto',
+                    occurred_at  TEXT,
                     created_at   TEXT NOT NULL,
                     updated_at   TEXT NOT NULL,
                     last_used_at TEXT,
@@ -118,6 +121,10 @@ class Storage:
                 )
                 """
             )
+            # 老库迁移：补 occurred_at 列（旧数据为空，渲染时回退为不显示日期）
+            memory_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(memory)")}
+            if "occurred_at" not in memory_cols:
+                self._conn.execute("ALTER TABLE memory ADD COLUMN occurred_at TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_cat_status ON memory(category, status)"
             )
@@ -161,8 +168,19 @@ class Storage:
 
     # ---------- memory（S5 长期记忆）----------
 
-    def create_memory(self, category: str, content: str, keywords: str = "", source: str = "auto") -> int | None:
-        """新增一条长期记忆。同类别同内容已存在（UNIQUE 冲突）→ 不新增，返回 None。"""
+    def create_memory(
+        self,
+        category: str,
+        content: str,
+        keywords: str = "",
+        source: str = "auto",
+        occurred_at: str | None = None,
+    ) -> int | None:
+        """新增一条长期记忆。同类别同内容已存在（UNIQUE 冲突）→ 不新增，返回 None。
+
+        occurred_at=事实发生时间（对话任务创建时间）；不传则保持 NULL（宁缺毋滥，
+        渲染时无日期——避免拿入库时间冒充事实时间误导模型）。
+        """
         if not category or not content:
             return None
         content = content.strip()
@@ -173,10 +191,10 @@ class Storage:
             with self._lock, self._conn:
                 cur = self._conn.execute(
                     """
-                    INSERT INTO memory (category, content, keywords, source, created_at, updated_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 'active')
+                    INSERT INTO memory (category, content, keywords, source, occurred_at, created_at, updated_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
                     """,
-                    (category, content, keywords, source, now, now),
+                    (category, content, keywords, source, occurred_at, now, now),
                 )
                 return cur.lastrowid
         except sqlite3.IntegrityError:
