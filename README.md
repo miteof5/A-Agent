@@ -11,7 +11,7 @@
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
 - **RepeatGuard 防死循环**：双通道检测（同工具同参数 / 同结果），soft 温和纠偏喂回 LLM，hard 终止任务
 - **便捷切换模型**：`models.txt` 清单（按厂商分组、多模态最后）+ 前端「⚙ 模型」管理视图，运行时热切换（base_url/api_key 不变，只换模型名）；切换前自动校验（额度/存在性），失败自动回滚；切换结果持久化，重启不丢
-- **前端（单文件）**：对话式界面（会话列表 / 思考过程折叠 / 审批卡 / 问答卡 / 日志面板 / 模型管理），SSE 流式 token + 状态轮询兜底
+- **前端（单文件）**：对话式界面（会话列表 / 思考过程折叠 / 审批卡 / 问答卡 / 日志面板 / 模型管理），SSE 流式 token + 状态轮询兜底；AI 回答按 **Markdown 渲染**（marked + DOMPurify 本地化，见「Markdown 渲染」节）
 - **长期记忆（S5）**：跨会话稳定事实存 SQLite `memory` 表——任务完成后**异步提炼**（价值过滤→LLM 提炼 add/update/skip，去重判断合并进同一次调用）→ 新任务开始时**检索注入** ≤5 条（S5.1：FTS5 关键词检索——标识符/数字/路径/≥3字中文子串命中，bm25 相关优先 + 活跃度兜底/补足；零命中退回活跃度）；宁缺毋滥，允许空提炼；**主题语义可插拔**：分类定义/提炼规则/注入标题收在 `LONG_MEMORY_SCHEMA`（换主题只改配置，机制零改动）
 - **滚动记忆压缩**：三层短期记忆——最近 5 轮完整原文 + 逐轮 Q+A 规则摘要 + 每 10 轮一次 LLM 段落摘要（events 表全量保留原文，压缩只影响上传量）；续聊时自动触发，上下文不随轮次线性膨胀
 - **Token 消耗标识**：对话页实时显示「累计消耗 Σ + 本轮上传 ↑」（SSE 推送，即时更新），压缩时提示瘦身效果
@@ -59,6 +59,8 @@ python -m src.main
 
 **换平台**：改 `AA_LLM_BASE_URL` / `AA_LLM_API_KEY` + 重写 `models.txt`，其他代码零改动。
 
+**Markdown 渲染**：AI 回答经 `marked.js` 解析（GFM：表格/列表/删除线/任务列表）→ `DOMPurify` 清洗（防 XSS）后在气泡内渲染，不再裸露 `**`、`` ` `` 等标记。两库放 `src/static/vendor/`（本地化，不依赖 CDN），后端在 `/vendor` 挂载静态目录；库缺失时前端自动降级纯文本。若需升级库，替换 vendor 下两个文件即可。
+
 环境变量覆盖（可选）：
 - `AA_LLM_MODEL`（显式固定模型，优先级最高；**建议留空**——填了会每次启动压过 UI 切换的持久化选择）
 - `AA_MODELS_FILE`（模型清单文件，默认 `models.txt`）
@@ -90,7 +92,7 @@ python -m src.main
 │   ├── plugins/         # permission / sse_relay / event_store / repeat_guard / tool_registry
 │   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ web_fetch（正文精读）/ get_current_time（取时）/ ask_user
 │   ├── proxy_manager.py # S5.4 代理管理层：Clash 优先/v2rayN 兜底/自动拉起/故障转移（不做自动关闭）
-│   ├── static/          # index.html 单文件前端（含模型管理视图）
+│   ├── static/          # index.html 单文件前端（含模型管理视图）+ vendor/（marked+DOMPurify 本地化，AI 回答 Markdown 渲染）
 │   ├── main.py          # 启动入口
 │   ├── api.py           # REST 路由 + SSE 事件流
 │   ├── reactor.py       # ReAct 主循环
