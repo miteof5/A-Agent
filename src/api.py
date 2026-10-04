@@ -42,6 +42,7 @@ from .tools.file_write import FileWriteTool
 from .tools.shell_run import ShellRunTool
 from .tools.web_search import WebSearchTool
 from .tools.web_fetch import WebFetchTool
+from .tools.current_time import TimeTool  # 取时：本地+UTC（实时精确层）
 from .proxy_manager import ProxyManager
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
         "ask_user": AskUserTool(kernel),  # S3.3：澄清通道（经 ctx.human_input 等待回答）
         "web_search": WebSearchTool(config, proxy_manager),  # S5.4：联网搜索（只读，两档放行）
         "web_fetch": WebFetchTool(config, proxy_manager, llm),  # S5.5：网页正文精读（只读，长正文走小模型压缩）
+        "get_current_time": TimeTool(),  # 取时：本地+UTC（只读，两档放行）
     }
     kernel.plugins.register(ToolRegistryPlugin(tools))
     kernel.plugins.register(PermissionPlugin(PermissionPolicy()))

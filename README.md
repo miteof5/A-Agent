@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **自主 ReAct 主循环**：手写实现，turn/step 双层循环 + 8 个事件扩展点（业务逻辑全部插件化，核心循环保持"瘦"）
-- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、**联网**（web_search 搜索线索 + web_fetch 正文精读，自动代理 Clash/v2rayN 故障转移 + 失败自动重试一次）、`ask_user` 人机交互
+- **工具调用**：Shell 执行（PowerShell、输出 64KB 有界、超时进程树清理）、**文件读取**（file_view 多格式：文本/GBK 回退/PDF/docx/xlsx，magic bytes 自动分派）、**文件写入**（file_write：UTF-8 + 回读校验 + JSON 校验 + replace 精准编辑 + 审批）、**联网**（web_search 搜索线索 + web_fetch 正文精读，自动代理 Clash/v2rayN 故障转移 + 失败自动重试一次）、**取时**（System Prompt 注入时间基准 + get_current_time 工具，本地/UTC）、`ask_user` 人机交互
 - **权限沙箱两档**：`on-demand`（按需确认：普通命令放行 + 高危命令弹窗审批）/ `full-access`（全部允许）+ 命令作用解释
 - **插件微内核**：EventBus 四模式（emit / bail / parallel / waterfall），BasePlugin + AgentContext，可独立开发、按需加载、可替换
 - **事件溯源 + 短期记忆**：SQLite events 全量落库 → 服务重启恢复（interrupted 标记）→ 同会话多轮对话 / 断点续跑
@@ -88,7 +88,7 @@ python -m src.main
 ├── src/
 │   ├── kernel/          # 微内核：EventBus / BasePlugin / AgentContext
 │   ├── plugins/         # permission / sse_relay / event_store / repeat_guard / tool_registry
-│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ web_fetch（正文精读）/ ask_user
+│   ├── tools/           # shell_run / file_view（多格式读取）/ file_write（安全写入）/ web_search（联网搜索）/ web_fetch（正文精读）/ get_current_time（取时）/ ask_user
 │   ├── proxy_manager.py # S5.4 代理管理层：Clash 优先/v2rayN 兜底/自动拉起/故障转移（不做自动关闭）
 │   ├── static/          # index.html 单文件前端（含模型管理视图）
 │   ├── main.py          # 启动入口

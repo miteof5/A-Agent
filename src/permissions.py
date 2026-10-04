@@ -155,6 +155,10 @@ class PermissionPolicy:
         if tool_name == "web_fetch":
             return ApprovalOutcome.ALLOWED, ""
 
+        # get_current_time：纯只读（返回当前时间），两档都放行
+        if tool_name == "get_current_time":
+            return ApprovalOutcome.ALLOWED, ""
+
         # file_write（S5.3）：修改性操作——on-demand 弹窗审批，full-access 放行
         if tool_name == "file_write":
             if mode == SandboxMode.FULL_ACCESS:

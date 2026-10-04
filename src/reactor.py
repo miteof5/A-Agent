@@ -22,6 +22,7 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime
 
 from .config import Config
 from .kernel.plugin import AgentContext
@@ -78,6 +79,10 @@ def build_system_prompt(tools: dict[str, "BaseTool"]) -> str:
     这里从该注册表读取 prompt_fragment。
     """
     parts = [PERSONA, CORE_PROMPT]  # 人设在前（定义"是谁"），工作规则在后（定义"怎么干"）
+    # 环境基准层：注入当前日期时间（agent 日常判断"今天几号/周几"直接用；
+    # 精确到秒/跨时区时用 get_current_time 工具，不重复注入避免老化）
+    now = datetime.now().astimezone()
+    parts.insert(1, f"当前日期时间（本地）：{now.strftime('%Y-%m-%d %H:%M:%S')} {['周一', '周二', '周三', '周四', '周五', '周六', '周日'][now.weekday()]}")
     for tool in tools.values():
         if tool.prompt_fragment:
             parts.append(tool.prompt_fragment)
