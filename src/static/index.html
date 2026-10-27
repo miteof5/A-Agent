@@ -262,7 +262,7 @@
   .dropdown-item.selected .di-main::after { content: '✓'; color: #4d6bfe; font-weight: 600; }
   .di-sub { font-size: 11px; color: var(--text-4); }
   .send-btn {
-    height: 32px; padding: 0 16px; margin-left: auto;
+    height: 32px; padding: 0 16px;
     border: none; border-radius: 8px;
     background: #4d6bfe; color: #fff; font-size: 13px; cursor: pointer;
     transition: background .15s;
@@ -307,7 +307,7 @@
   .ms-trigger {
     height: 32px; padding: 0 12px; border: 1px solid var(--border-2); border-radius: 8px;
     font-size: 12px; background: var(--surface-2); color: var(--text-2); cursor: pointer;
-    display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+    display: inline-flex; align-items: center; gap: 6px; max-width: 220px; margin-left: auto;
     transition: border-color .15s, background .15s;
   }
   .ms-trigger:hover { border-color: var(--text-4); }
@@ -317,30 +317,18 @@
     border-left: 4px solid transparent; border-right: 4px solid transparent;
     border-top: 5px solid var(--text-4);
   }
-  #modelSheet { position: fixed; inset: 0; z-index: 1000; display: none; align-items: flex-end; justify-content: center; }
-  #modelSheet.open { display: flex; }
-  #modelSheet .ms-mask { position: absolute; inset: 0; background: rgba(0,0,0,.35); opacity: 0; transition: opacity .2s; }
-  #modelSheet.open .ms-mask { opacity: 1; }
-  #modelSheet .ms-panel {
-    position: relative; width: 400px; max-width: 92vw; max-height: 60vh; margin-bottom: 24px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
-    box-shadow: 0 -6px 24px rgba(0,0,0,.18);
-    display: flex; flex-direction: column; overflow: hidden;
-    transform: translateY(20px); opacity: 0; transition: transform .2s, opacity .2s;
-  }
-  #modelSheet.open .ms-panel { transform: translateY(0); opacity: 1; }
-  #modelSheet .ms-scroll { overflow-y: auto; padding: 8px; }
+  #modelSheetMenu { min-width: 260px; max-height: 60vh; overflow-y: auto; }
   .ms-group { font-size: 11px; color: var(--text-3); padding: 10px 10px 4px; font-weight: 600; }
   .ms-item {
-    display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
     border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text);
   }
   .ms-item:hover { background: var(--surface-3); }
   .ms-item.active { color: #4d6bfe; font-weight: 500; }
   .ms-item .ms-check { margin-left: auto; color: #4d6bfe; font-weight: 600; flex: none; }
   .ms-config {
-    border-top: 1px solid var(--border); padding: 12px; text-align: center;
-    font-size: 13px; color: var(--text-2); cursor: pointer;
+    border-top: 1px solid var(--border); padding: 10px; text-align: center;
+    font-size: 12px; color: var(--text-3); cursor: pointer; margin: 4px -5px -5px;
   }
   .ms-config:hover { background: var(--surface-2); }
 </style>
@@ -472,9 +460,12 @@
           </div>
         </div>
         <span class="input-hint">Ctrl+Enter 发送 · Enter 换行</span>
-        <button type="button" class="ms-trigger" id="modelSheetTrigger" title="切换模型">
-          <span class="ms-name">加载中…</span>
-        </button>
+        <div class="dropdown" id="modelDropdown">
+          <button type="button" class="ms-trigger" id="modelSheetTrigger" title="切换模型">
+            <span class="ms-name">加载中…</span>
+          </button>
+          <div class="dropdown-menu" id="modelSheetMenu"></div>
+        </div>
         <button id="sendBtn" class="send-btn">发送</button>
       </div>
     </div>
@@ -492,13 +483,6 @@
   <div class="model-tip">点击模型即时切换；切换前自动校验（额度/是否存在），失败自动回滚。清单文件：models.txt（换平台改 base_url/api_key + 重写清单）</div>
 </div>
 
-<!-- 模型切换浮层（底部弹出，主入口；配置自定义模型跳上方独立视图） -->
-<div id="modelSheet">
-  <div class="ms-mask" id="modelSheetMask"></div>
-  <div class="ms-panel">
-    <div class="ms-scroll" id="modelSheetList"></div>
-    <div class="ms-config" id="modelSheetConfig">⚙ 配置自定义模型</div>
-  </div>
 </div>
 
 <script>
@@ -632,10 +616,8 @@ const el = {
   modelCurrent: document.getElementById('modelCurrent'),
   modelList: document.getElementById('modelList'),
   modelSheetTrigger: document.getElementById('modelSheetTrigger'),
-  modelSheet: document.getElementById('modelSheet'),
-  modelSheetList: document.getElementById('modelSheetList'),
-  modelSheetMask: document.getElementById('modelSheetMask'),
-  modelSheetConfig: document.getElementById('modelSheetConfig'),
+  modelSheetMenu: document.getElementById('modelSheetMenu'),
+  modelDropdown: document.getElementById('modelDropdown'),
   tokenBadge: document.getElementById('tokenBadge')
 };
 
@@ -727,18 +709,26 @@ function setTriggerName(name) {
   el.modelSheetTrigger.querySelector('.ms-name').textContent = truncate(name, 18);
   el.modelSheetTrigger.title = name;
 }
+function closeAllDropdowns() {
+  modeMenu.classList.remove('open');
+  modeTrigger.setAttribute('aria-expanded', 'false');
+  el.modelSheetMenu.classList.remove('open');
+}
 async function openModelSheet() {
-  el.modelSheetList.innerHTML = '<div class="ms-group">加载中…</div>';
-  el.modelSheet.classList.add('open');
+  const willOpen = !el.modelSheetMenu.classList.contains('open');
+  closeAllDropdowns();
+  if (!willOpen) return;
+  el.modelSheetMenu.classList.add('open');
+  el.modelSheetMenu.innerHTML = '<div class="ms-group">加载中…</div>';
   try {
     const data = await api.listModels();
     setTriggerName(data.current);
-    el.modelSheetList.innerHTML = '';
+    el.modelSheetMenu.innerHTML = '';
     for (const g of data.groups) {
       const h = document.createElement('div');
       h.className = 'ms-group';
       h.textContent = g.group;
-      el.modelSheetList.appendChild(h);
+      el.modelSheetMenu.appendChild(h);
       for (const m of g.models) {
         const it = document.createElement('div');
         it.className = 'ms-item' + (m === data.current ? ' active' : '');
@@ -750,14 +740,19 @@ async function openModelSheet() {
           it.appendChild(ck);
         }
         it.addEventListener('click', () => pickSheetModel(m));
-        el.modelSheetList.appendChild(it);
+        el.modelSheetMenu.appendChild(it);
       }
     }
+    const cfg = document.createElement('div');
+    cfg.className = 'ms-config';
+    cfg.textContent = '⚙ 配置自定义模型';
+    cfg.addEventListener('click', () => { closeModelSheet(); openModelView(); });
+    el.modelSheetMenu.appendChild(cfg);
   } catch (err) {
-    el.modelSheetList.innerHTML = '<div class="ms-group">加载失败：' + escapeHtml(err.message) + '</div>';
+    el.modelSheetMenu.innerHTML = '<div class="ms-group">加载失败：' + escapeHtml(err.message) + '</div>';
   }
 }
-function closeModelSheet() { el.modelSheet.classList.remove('open'); }
+function closeModelSheet() { el.modelSheetMenu.classList.remove('open'); }
 async function pickSheetModel(name) {
   if (name === sheetCurrent) { closeModelSheet(); return; }
   try {
@@ -1377,10 +1372,8 @@ function resetToNewChat() {
 document.getElementById('newChatBtn').addEventListener('click', resetToNewChat);
 document.getElementById('modelBtn').addEventListener('click', openModelView);
 document.getElementById('modelBackBtn').addEventListener('click', closeModelView);
-el.modelSheetTrigger.addEventListener('click', openModelSheet);
-el.modelSheetMask.addEventListener('click', closeModelSheet);
-el.modelSheetConfig.addEventListener('click', () => { closeModelSheet(); openModelView(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && el.modelSheet.classList.contains('open')) closeModelSheet(); });
+el.modelSheetTrigger.addEventListener('click', (e) => { e.stopPropagation(); openModelSheet(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModelSheet(); modeMenu.classList.remove('open'); } });
 el.sendBtn.addEventListener('click', runTask);
 el.taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask(); });
 /* 输入框 auto-grow（豆包式）：高度跟随内容长高，最多约10行，超出出现滚动条 */
@@ -1418,6 +1411,7 @@ document.addEventListener('click', (e) => {
     modeMenu.classList.remove('open');
     modeTrigger.setAttribute('aria-expanded', 'false');
   }
+  if (!e.target.closest('#modelDropdown')) closeModelSheet();
 });
 syncTrigger();
 el.stopBtn.addEventListener('click', stopTask);
