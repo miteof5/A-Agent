@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-07T04:30:00+08:00",
+  "title": "Design System: ActionAgent 控制台",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Cold Drawing Paper", "canonical": "#f4f5f1", "tonalRamp": ["#1a1a17", "#35332c", "#4c4a41", "#63604f", "#8b8878", "#b6b3a4", "#d8d6c9", "#f4f5f1"] },
+      "blueprint-blue": { "role": "primary", "displayName": "Blueprint Blue", "canonical": "#1e56c4", "tonalRamp": ["#0a1c3f", "#0e2a63", "#12388a", "#1e56c4", "#3a72d8", "#5f92e6", "#9bbcf0", "#dbe7fb"] },
+      "ok-green": { "role": "tertiary", "displayName": "Ok Green", "canonical": "#2e7d32", "tonalRamp": ["#0c2b10", "#12471a", "#1d6527", "#2e7d32", "#4a9b4f", "#74ba79", "#aad6ad", "#e3f2e4"] },
+      "error-red": { "role": "tertiary", "displayName": "Error Red", "canonical": "#c62828", "tonalRamp": ["#3d0a0a", "#611212", "#8f1d1d", "#c62828", "#d84a4a", "#e57a7a", "#f0b2b2", "#fce9e9"] },
+      "warn-amber": { "role": "tertiary", "displayName": "Warn Amber", "canonical": "#a2651a", "tonalRamp": ["#2e1a05", "#4e2d0b", "#74461c", "#a2651a", "#c0843a", "#d3a263", "#e5c393", "#f7ecd7"] }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Body", "purpose": "对话内容、Markdown 正文（14px/1.7）" },
+      "mono": { "displayName": "Mono Data", "purpose": "所有数据、参数、时间戳、日志、标签（11-12px）" }
+    },
+    "shadows": [
+      { "name": "float-low", "value": "0 2px 12px rgba(30,26,18,.10)", "purpose": "仅浮层（下拉菜单、toast）与图纸面分离" }
+    ],
+    "motion": [
+      { "name": "theme-fade", "value": "background-color .8s ease, color .8s ease", "purpose": "昼夜主题过渡" },
+      { "name": "ease-quick", "value": "all .15s ease", "purpose": "hover/focus 等微交互" }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "1080px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "主操作：发送任务 / 新建任务，工程蓝直角按钮。",
+      "html": "<button class=\"ds-btn-primary\">发送任务</button>",
+      "css": ".ds-btn-primary { background:#1e56c4; color:#fff; font-family:Consolas,'SF Mono',monospace; font-size:12px; letter-spacing:.4px; border:none; border-radius:2px; height:28px; padding:0 18px; cursor:pointer; transition:background .15s; } .ds-btn-primary:hover { background:#17459e; } .ds-btn-primary:focus-visible { outline:2px solid #1e56c4; outline-offset:2px; } .ds-btn-primary:disabled { background:#5c594e; cursor:not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "次级操作：模型切换、停止任务等顶栏按钮。",
+      "html": "<button class=\"ds-btn-ghost\">停止任务</button>",
+      "css": ".ds-btn-ghost { background:#fafbf7; color:#4c4a41; font-family:Consolas,'SF Mono',monospace; font-size:12px; border:1px solid #bec1b8; border-radius:2px; height:28px; padding:0 12px; cursor:pointer; transition:all .15s; } .ds-btn-ghost:hover { border-color:#1e56c4; color:#1e56c4; } .ds-btn-ghost:focus-visible { outline:2px solid #1e56c4; outline-offset:2px; }"
+    },
+    {
+      "name": "Tool Part",
+      "kind": "custom",
+      "refersTo": "tool-part",
+      "description": "签名组件：一次工具调用的编号零件 + 引线标注。",
+      "html": "<div class=\"ds-tool\"><div class=\"ds-tool-no\">3</div><div class=\"ds-tool-body\"><div class=\"ds-tool-name\">read_file</div><div class=\"ds-tool-args\">path=src/api.py</div><div class=\"ds-tool-status ok\">✓ 完成 12ms</div></div></div>",
+      "css": ".ds-tool { position:relative; display:flex; gap:10px; background:#fafbf7; border:1px solid #bec1b8; border-radius:2px; padding:6px 10px 6px 12px; margin:6px 0; } .ds-tool::before { content:''; position:absolute; left:26px; top:-7px; width:1px; height:7px; border-left:1px dashed #93968b; } .ds-tool-no { width:20px; height:20px; border:1px solid #1e56c4; border-radius:50%; color:#1e56c4; font-family:Consolas,monospace; font-size:11px; display:flex; align-items:center; justify-content:center; flex:none; } .ds-tool-name { font-family:Consolas,monospace; font-size:12px; color:#1e56c4; } .ds-tool-args { font-family:Consolas,monospace; font-size:11px; color:#6f6c60; } .ds-tool-status { font-size:11px; color:#5c594e; } .ds-tool-status.ok { color:#2e7d32; } .ds-tool-status.err { color:#c62828; }"
+    },
+    {
+      "name": "Approval Stamp",
+      "kind": "custom",
+      "refersTo": "approval-stamp",
+      "description": "签名组件：高危操作会签，批准/拒绝后盖章。",
+      "html": "<div class=\"ds-approve\"><div class=\"ds-approve-title\">⚠ 高危操作 · 会签审批</div><div class=\"ds-approve-row\"><button class=\"ds-btn-approve\">批准</button><button class=\"ds-btn-deny\">拒绝</button></div><div class=\"ds-stamp\">APPROVED</div></div>",
+      "css": ".ds-approve { position:relative; border:2px solid #a2651a; background:#fbf0dc; border-radius:2px; padding:10px 12px; margin:8px 0; } .ds-approve-title { font-size:13px; font-weight:600; color:#5c3a0e; } .ds-approve-row { display:flex; gap:8px; margin-top:8px; } .ds-btn-approve { background:#2e7d32; color:#fff; border:none; border-radius:2px; height:26px; padding:0 14px; font-size:12px; cursor:pointer; } .ds-btn-deny { background:transparent; color:#c62828; border:1px solid #c62828; border-radius:2px; height:26px; padding:0 14px; font-size:12px; cursor:pointer; } .ds-stamp { position:absolute; right:14px; top:12px; transform:rotate(-6deg); border:2px solid #2e7d32; color:#2e7d32; font-family:Consolas,monospace; font-size:15px; font-weight:700; letter-spacing:2px; padding:2px 8px; border-radius:2px; opacity:.9; }"
+    },
+    {
+      "name": "Input Dock",
+      "kind": "input",
+      "refersTo": "input-dock",
+      "description": "底部任务输入区，聚焦工程蓝描边。",
+      "html": "<div class=\"ds-input\"><textarea placeholder=\"输入任务开始对话…\"></textarea><div class=\"ds-input-meta\"><span>M0-32B</span><button class=\"ds-btn-primary\">发送</button></div></div>",
+      "css": ".ds-input { background:#fafbf7; border:1.5px solid #bec1b8; border-radius:2px; padding:10px 12px 8px; } .ds-input:focus-within { border-color:#1e56c4; box-shadow:0 0 0 2px rgba(30,86,196,.10); } .ds-input textarea { width:100%; border:none; outline:none; resize:none; background:transparent; font:14px/1.6 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif; color:#23211c; min-height:48px; } .ds-input-meta { display:flex; justify-content:space-between; align-items:center; margin-top:6px; } .ds-input-meta span { font-family:Consolas,monospace; font-size:11px; color:#6f6c60; }"
+    },
+    {
+      "name": "Session Item",
+      "kind": "nav",
+      "refersTo": "session-item",
+      "description": "左 rail 图纸清单条目：编号 + 状态点 + 标题 + 时间。",
+      "html": "<div class=\"ds-sess\"><span class=\"ds-sess-no\">01</span><span class=\"ds-sess-dot ok\"></span><div class=\"ds-sess-body\"><div class=\"ds-sess-title\">读取 README-S1.md 并总结</div><div class=\"ds-sess-time\">14:32</div></div></div>",
+      "css": ".ds-sess { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid transparent; border-radius:2px; cursor:pointer; } .ds-sess:hover { border-color:#dadcd4; } .ds-sess.active { border-color:#1e56c4; background:rgba(30,86,196,.06); } .ds-sess-no { font-family:Consolas,monospace; font-size:11px; color:#6f6c60; } .ds-sess-dot { width:7px; height:7px; border-radius:50%; background:#2e7d32; flex:none; } .ds-sess-title { font-size:12.5px; color:#23211c; line-height:1.4; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; } .ds-sess-time { font-family:Consolas,monospace; font-size:11px; color:#6f6c60; margin-left:auto; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "一张正在展开的工程图纸",
+    "overview": "ActionAgent 是本地运行的自驱动 AI Agent 的操作控制台。它的视觉世界借用了工程制图的全部纪律：白纸墨线的层次、等宽标注承载数据、编号零件与引线标注呈现每一次工具调用、会签与盖章呈现审批结果、标题栏承载任务元信息。这个世界的选择源于产品本质——Agent 的每一次真实动作都必须可观察、可审计、可干预，而工程图纸正是'精确、可追溯、无歧义'的视觉契约。\n\n界面密度高而克制：hairline 结构线、1px 常规线、2px 主轮廓构成线宽层级；工程蓝是唯一交互色；状态色遵循制图惯例。控件全部是标准 web 组件（直角、细描边）。夜间主题是'暗色图纸'，由太阳高度角连续插值过渡。",
+    "keyCharacteristics": [
+      "白纸/暗纸底 + 墨线层次，无渐变、无玻璃拟态、无大圆角（统一 2px）",
+      "等宽字体承载一切数据与标注；编号圆（直径 20px）标注工具调用",
+      "工程蓝是唯一 accent；状态色只做状态，不做装饰",
+      "工具调用=带引线的编号零件；审批=会签章（旋转 -6°）",
+      "顶部标题栏以表格化信息格呈现任务/状态/模型/Token"
+    ],
+    "rules": [
+      { "name": "The One-Blue Rule", "body": "工程蓝只出现在可交互元素、选中态、执行状态与链接上；任何纯装饰用途都是越界。同一屏上蓝的占比通常低于 10%。", "section": "colors" },
+      { "name": "The Line-Hierarchy Rule", "body": "线宽即层级：hairline 用于结构分隔，常规用于控件描边，主轮廓用于需要强调的边界。不得用颜色深浅替代线宽层级。", "section": "colors" },
+      { "name": "The Mono-Data Rule", "body": "数字、参数、路径、时间戳一律等宽；正文和解释性文字一律无衬线。两种字体各司其职，不得混用。", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "表面静止时一律平。阴影只出现在需要'浮在图纸上方'的临时层（下拉菜单、toast）。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 用编号圆 + 引线标注呈现每一次工具调用——这是本系统区别于普通聊天的签名动作。",
+      "Do 让审批结果以'盖章'收尾：批准盖 APPROVED 章、拒绝盖 DENIED 章，盖章即结论。",
+      "Do 用等宽字体呈现所有数据（Token、参数、时间、日志、模型名）。",
+      "Do 把状态色用在状态上：绿=通过、红=拒绝、琥珀=待批，且只做状态。",
+      "Do 保持 2px 直角；圆角出现在 2px 以上即偏离图纸世界。",
+      "Do 沿用三栏布局（rail + 对话流 + 面板），新功能优先放入现有区域。"
+    ],
+    "donts": [
+      "Don't 引入渐变、玻璃拟态、大圆角、插画或 emoji 装饰——它们属于另一种界面语言。",
+      "Don't 让工程蓝进入纯装饰用途（图标填充、背景色块），它只服务交互与状态。",
+      "Don't 用消费级'卡片堆叠'组织任务——任务属于图纸清单，一行一条。",
+      "Don't 让文字低于 11px（功能文字）或正文低于 14px；等宽标注最小 11px。",
+      "Don't 给静止表面加阴影；浮层（菜单/toast）之外一律平。",
+      "Don't 用暖奶油色背景——图纸纸底保持冷灰白（#f4f5f1）。"
+    ]
+  }
+}
