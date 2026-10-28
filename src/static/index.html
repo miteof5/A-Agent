@@ -312,36 +312,36 @@
   .toast.ok { background: #065f46; }
   .blink { animation: blink 1s infinite; }
   @keyframes blink { 50% { opacity: 0.35; } }
-  /* ---- 模型管理视图（模型切换）---- */
-  .model-view { padding: 28px 24px; max-width: 760px; margin: 0 auto; height: 100vh; box-sizing: border-box; overflow-y: auto; }
-  .model-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-  .model-head h2 { margin: 0; font-size: 17px; }
-  .model-back { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
-  .model-back:hover { background: var(--surface-3); }
-  .model-current { font-size: 15px; padding: 12px 16px; background: var(--selected-bg); border: 1px solid var(--approval-border); border-radius: 10px; margin-bottom: 8px; }
-  .model-current b { color: #4d6bfe; }
-  .model-group { margin: 16px 0 6px; font-size: 13px; color: var(--text-3); font-weight: 600; }
-  .model-row { display: inline-flex; align-items: center; margin: 4px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 16px; cursor: pointer; background: var(--surface); font-size: 13px; }
-  .model-row:hover { border-color: #c7ceff; background: var(--surface-3); }
-  .model-row.active { background: #4d6bfe; color: #fff; border-color: #4d6bfe; }
-  .model-row.busy { opacity: .55; pointer-events: none; }
-  .model-tip { font-size: 12px; color: var(--text-4); margin-top: 20px; }
-
-  /* ---- 模型切换浮层（豆包式底部弹出；触发器在输入栏右侧） ---- */
+  /* ---- 模型切换浮层（向上弹出；唯一入口，触发器在输入栏右侧） ---- */
+  #modelDropdown { margin-left: auto; }
   .ms-trigger {
     height: 32px; padding: 0 12px; border: 1px solid var(--border-2); border-radius: 8px;
     font-size: 12px; background: var(--surface-2); color: var(--text-2); cursor: pointer;
-    display: inline-flex; align-items: center; gap: 6px; max-width: 220px; margin-left: auto;
+    display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
     transition: border-color .15s, background .15s;
   }
   .ms-trigger:hover { border-color: var(--text-4); }
+  .ms-trigger[aria-expanded="true"] { border-color: #4d6bfe; }
   .ms-trigger .ms-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ms-trigger::after {
     content: ''; width: 0; height: 0; flex: none;
     border-left: 4px solid transparent; border-right: 4px solid transparent;
     border-top: 5px solid var(--text-4);
   }
-  #modelSheetMenu { min-width: 260px; max-height: 60vh; overflow-y: auto; }
+  /* 布局归 ID，显隐归 .dropdown-menu(/.open)。此块禁止声明 display ——
+     ID 特异性 (1,0,0) 会压死 .dropdown-menu.open (0,2,0)，导致菜单永远展开、收不起来。 */
+  #modelSheetMenu {
+    min-width: 260px; max-width: 320px; right: 0; left: auto;
+    padding: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 32px rgba(0,0,0,.28), 0 2px 8px rgba(0,0,0,.18);
+  }
+  #modelSheetMenu .ms-list { max-height: calc(60vh - 14px); overflow-y: auto; }
+  #modelSheetMenu .ms-list::-webkit-scrollbar { width: 6px; }
+  #modelSheetMenu .ms-list::-webkit-scrollbar-track { background: transparent; }
+  #modelSheetMenu .ms-list::-webkit-scrollbar-thumb { background: rgba(128,128,128,.35); border-radius: 3px; }
+  #modelSheetMenu .ms-list::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,.55); }
   .ms-group { font-size: 11px; color: var(--text-3); padding: 10px 10px 4px; font-weight: 600; }
   .ms-item {
     display: flex; align-items: center; gap: 8px; padding: 8px 10px;
@@ -350,11 +350,6 @@
   .ms-item:hover { background: var(--surface-3); }
   .ms-item.active { color: #4d6bfe; font-weight: 500; }
   .ms-item .ms-check { margin-left: auto; color: #4d6bfe; font-weight: 600; flex: none; }
-  .ms-config {
-    border-top: 1px solid var(--border); padding: 10px; text-align: center;
-    font-size: 12px; color: var(--text-3); cursor: pointer; margin: 4px -5px -5px;
-  }
-  .ms-config:hover { background: var(--surface-2); }
 </style>
 <!-- 昼夜主题（精细版）：按太阳高度角实时连续插值整套主题色，纯本地天文算法，无 API 无 CDN。
      改城市：调整下方 LAT/LON 两个常量即可。 -->
@@ -443,7 +438,6 @@
     <div class="sidebar-head">
       <h1>🤖 ActionAgent</h1>
       <button id="newChatBtn" class="new-chat">＋ 新建会话</button>
-      <button id="modelBtn" class="new-chat" style="margin-top:6px;">⚙ 模型</button>
     </div>
     <div class="sess-list" id="sessList">
       <div class="sess-empty">暂无会话</div>
@@ -485,7 +479,7 @@
         </div>
         <span class="input-hint">Ctrl+Enter 发送 · Enter 换行</span>
         <div class="dropdown" id="modelDropdown">
-          <button type="button" class="ms-trigger" id="modelSheetTrigger" title="切换模型">
+          <button type="button" class="ms-trigger" id="modelSheetTrigger" title="切换模型" aria-expanded="false" aria-haspopup="true">
             <span class="ms-name">加载中…</span>
           </button>
           <div class="dropdown-menu" id="modelSheetMenu"></div>
@@ -494,19 +488,6 @@
       </div>
     </div>
   </main>
-</div>
-
-<!-- 模型管理视图（模型切换；独立视图，避免对话页冗余） -->
-<div id="modelView" class="model-view" style="display:none;">
-  <div class="model-head">
-    <button id="modelBackBtn" class="model-back">← 返回对话</button>
-    <h2>⚙ 模型管理</h2>
-  </div>
-  <div class="model-current" id="modelCurrent">当前模型：加载中…</div>
-  <div class="model-list" id="modelList"></div>
-  <div class="model-tip">点击模型即时切换；切换前自动校验（额度/是否存在），失败自动回滚。清单文件：models.txt（换平台改 base_url/api_key + 重写清单）</div>
-</div>
-
 </div>
 
 <script>
@@ -521,6 +502,12 @@ const MODE_OLD_ALIAS = { 'read-only': 'on-demand', 'workspace-write': 'on-demand
 function normMode(m) {
   const n = (m && MODE_OLD_ALIAS[m]) || m || '';
   return MODE_LABELS[n] ? n : 'on-demand';
+}
+/* 后端错误体有两种形状：HTTPException 的 {"detail":{"code","message"}} 与普通 {"message":...}。
+   不解包 detail 的话，前端只能拿到 "切换失败" 四个字，看不到真实原因。 */
+function apiErrMsg(data, fallback) {
+  const d = (data && data.detail) || {};
+  return d.message || d.code || (data && data.message) || fallback;
 }
 const api = {
   async createTask(content, sandboxMode) {
@@ -574,7 +561,7 @@ const api = {
   async listModels() {
     const res = await fetch('/api/v1/models');
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || '获取模型清单失败');
+    if (!res.ok) throw new Error(apiErrMsg(data, '获取模型清单失败'));
     return data;
   },
   async switchModel(name) {
@@ -583,7 +570,7 @@ const api = {
       body: JSON.stringify({ name })
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || '切换失败');
+    if (!res.ok) throw new Error(apiErrMsg(data, '切换失败'));
     return data;
   },
   async getLogs(taskId) {
@@ -634,11 +621,6 @@ const el = {
   taskInput: document.getElementById('taskInput'),
   modeSelect: document.getElementById('modeSelect'),
   sessList: document.getElementById('sessList'),
-  modelBtn: document.getElementById('modelBtn'),
-  modelView: document.getElementById('modelView'),
-  modelBackBtn: document.getElementById('modelBackBtn'),
-  modelCurrent: document.getElementById('modelCurrent'),
-  modelList: document.getElementById('modelList'),
   modelSheetTrigger: document.getElementById('modelSheetTrigger'),
   modelSheetMenu: document.getElementById('modelSheetMenu'),
   modelDropdown: document.getElementById('modelDropdown'),
@@ -675,57 +657,7 @@ function showToast(msg, kind) {
   box.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
-/* ---- 模型管理视图（模型切换：清单下拉式、点选即时生效、校验失败回滚）---- */
-async function openModelView() {
-  document.querySelector('.app').style.display = 'none';
-  el.modelView.style.display = '';
-  await refreshModels();
-}
-function closeModelView() {
-  el.modelView.style.display = 'none';
-  document.querySelector('.app').style.display = '';
-}
-async function refreshModels() {
-  try {
-    const data = await api.listModels();
-    const cur = data.current;
-    el.modelCurrent.innerHTML = '当前模型：<b>' + escapeHtml(cur) + '</b>';
-    el.modelList.innerHTML = '';
-    for (const g of data.groups) {
-      const h = document.createElement('div');
-      h.className = 'model-group';
-      h.textContent = g.group;
-      el.modelList.appendChild(h);
-      for (const m of g.models) {
-        const b = document.createElement('button');
-        b.className = 'model-row' + (m === cur ? ' active' : '');
-        b.textContent = m;
-        b.addEventListener('click', () => doSwitch(m, b));
-        el.modelList.appendChild(b);
-      }
-    }
-  } catch (err) {
-    el.modelCurrent.textContent = '加载失败：' + err.message;
-  }
-}
-async function doSwitch(name, btn) {
-  if (btn.classList.contains('active') || btn.classList.contains('busy')) return;
-  btn.classList.add('busy');
-  const old = btn.textContent;
-  btn.textContent = '校验中…';
-  try {
-    const r = await api.switchModel(name);
-    showToast('已切换为 ' + r.current, 'ok');
-    setTriggerName(r.current);
-    await refreshModels();
-  } catch (err) {
-    showToast('切换失败：' + (err.message || '未知错误'), 'error');
-    btn.textContent = old;
-    btn.classList.remove('busy');
-  }
-}
-
-/* ---- 模型切换浮层（底部弹出主入口） ---- */
+/* ---- 模型切换浮层（向上弹出；唯一入口） ---- */
 let sheetCurrent = '';
 function setTriggerName(name) {
   if (!name) return;
@@ -733,59 +665,81 @@ function setTriggerName(name) {
   el.modelSheetTrigger.querySelector('.ms-name').textContent = truncate(name, 18);
   el.modelSheetTrigger.title = name;
 }
-function closeAllDropdowns() {
+/* 两个下拉的开合只有一个出口：open 类 + aria-expanded 始终同步 */
+function closeModeMenu() {
   modeMenu.classList.remove('open');
   modeTrigger.setAttribute('aria-expanded', 'false');
-  el.modelSheetMenu.classList.remove('open');
 }
-async function openModelSheet() {
-  const willOpen = !el.modelSheetMenu.classList.contains('open');
-  closeAllDropdowns();
-  if (!willOpen) return;
+function closeModelSheet() {
+  el.modelSheetMenu.classList.remove('open');
+  el.modelSheetTrigger.setAttribute('aria-expanded', 'false');
+}
+function openModelSheet() {
+  closeModeMenu();  // 与模式下拉互斥
   el.modelSheetMenu.classList.add('open');
-  el.modelSheetMenu.innerHTML = '<div class="ms-group">加载中…</div>';
+  el.modelSheetTrigger.setAttribute('aria-expanded', 'true');
+  loadModelSheet();
+}
+async function loadModelSheet() {
+  const list = document.createElement('div');
+  list.className = 'ms-list';
+  list.innerHTML = '<div class="ms-group">加载中…</div>';
+  el.modelSheetMenu.innerHTML = '';
+  el.modelSheetMenu.appendChild(list);
   try {
     const data = await api.listModels();
     setTriggerName(data.current);
-    el.modelSheetMenu.innerHTML = '';
+    list.innerHTML = '';
     for (const g of data.groups) {
       const h = document.createElement('div');
       h.className = 'ms-group';
       h.textContent = g.group;
-      el.modelSheetMenu.appendChild(h);
+      list.appendChild(h);
       for (const m of g.models) {
         const it = document.createElement('div');
-        it.className = 'ms-item' + (m === data.current ? ' active' : '');
+        it.className = 'ms-item';
+        it.dataset.model = m;
         it.textContent = m;
-        if (m === data.current) {
-          const ck = document.createElement('span');
-          ck.className = 'ms-check';
-          ck.textContent = '✓';
-          it.appendChild(ck);
-        }
         it.addEventListener('click', () => pickSheetModel(m));
-        el.modelSheetMenu.appendChild(it);
+        list.appendChild(it);
       }
     }
-    const cfg = document.createElement('div');
-    cfg.className = 'ms-config';
-    cfg.textContent = '⚙ 配置自定义模型';
-    cfg.addEventListener('click', () => { closeModelSheet(); openModelView(); });
-    el.modelSheetMenu.appendChild(cfg);
+    renderSheetSelection();  // ✓/高亮统一由 sheetCurrent 决定，建完即对齐
   } catch (err) {
-    el.modelSheetMenu.innerHTML = '<div class="ms-group">加载失败：' + escapeHtml(err.message) + '</div>';
+    list.innerHTML = '<div class="ms-group">加载失败：' + escapeHtml(err.message) + '</div>';
   }
 }
-function closeModelSheet() { el.modelSheetMenu.classList.remove('open'); }
+/* 选中态只认 sheetCurrent 一个真相源：原地迁移 ✓ 与高亮，不重建 DOM（滚动位置不丢） */
+function renderSheetSelection() {
+  el.modelSheetMenu.querySelectorAll('.ms-item').forEach((it) => {
+    const on = it.dataset.model === sheetCurrent;
+    it.classList.toggle('active', on);
+    let ck = it.querySelector('.ms-check');
+    if (on && !ck) {
+      ck = document.createElement('span');
+      ck.className = 'ms-check';
+      ck.textContent = '✓';
+      it.appendChild(ck);
+    } else if (!on && ck) {
+      ck.remove();
+    }
+  });
+}
+let sheetPending = false;
 async function pickSheetModel(name) {
+  if (sheetPending) return;  // 防连点：避免两次 1-token 试水请求
   if (name === sheetCurrent) { closeModelSheet(); return; }
+  sheetPending = true;
   try {
     const r = await api.switchModel(name);
-    showToast('已切换为 ' + r.current, 'ok');
-    setTriggerName(r.current);
+    setTriggerName(r.current);   // 写 sheetCurrent
+    renderSheetSelection();      // 立即迁移选中（不再靠"关掉重开"刷新）
     closeModelSheet();
+    showToast('已切换为 ' + r.current, 'ok');
   } catch (err) {
     showToast('切换失败：' + (err.message || '未知错误'), 'error');
+  } finally {
+    sheetPending = false;
   }
 }
 function setPill(stateName) {
@@ -1394,10 +1348,13 @@ function resetToNewChat() {
   emptyChat('👋 输入任务开始对话，例如：<br>“读取 README-S1.md 并总结”<br>或 “帮我删除桌面上有关截图的图片”');
 }
 document.getElementById('newChatBtn').addEventListener('click', resetToNewChat);
-document.getElementById('modelBtn').addEventListener('click', openModelView);
-document.getElementById('modelBackBtn').addEventListener('click', closeModelView);
-el.modelSheetTrigger.addEventListener('click', (e) => { e.stopPropagation(); openModelSheet(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModelSheet(); modeMenu.classList.remove('open'); } });
+el.modelSheetTrigger.addEventListener('click', (e) => {
+  e.stopPropagation();
+  // 同步 toggle：已开则关，未开则开（异步加载在后面）
+  if (el.modelSheetMenu.classList.contains('open')) closeModelSheet();
+  else openModelSheet();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModelSheet(); closeModeMenu(); } });
 el.sendBtn.addEventListener('click', runTask);
 el.taskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runTask(); });
 /* 输入框 auto-grow（豆包式）：高度跟随内容长高，最多约10行，超出出现滚动条 */
@@ -1420,6 +1377,7 @@ modeTrigger.addEventListener('click', (e) => {
   e.stopPropagation();
   const open = modeMenu.classList.toggle('open');
   modeTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) closeModelSheet();  // 与模型面板互斥（反方向）
 });
 modeMenu.addEventListener('click', (e) => {
   const item = e.target.closest('.dropdown-item');
@@ -1431,10 +1389,7 @@ modeMenu.addEventListener('click', (e) => {
   modeTrigger.setAttribute('aria-expanded', 'false');
 });
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('#modeDropdown')) {
-    modeMenu.classList.remove('open');
-    modeTrigger.setAttribute('aria-expanded', 'false');
-  }
+  if (!e.target.closest('#modeDropdown')) closeModeMenu();
   if (!e.target.closest('#modelDropdown')) closeModelSheet();
 });
 syncTrigger();
