@@ -100,6 +100,30 @@
     padding: 20px 48px 40px;
     display: flex; flex-direction: column; gap: 12px;
   }
+
+  /* ---- 聊天区滚动条（只作用于 .chat-flow）----
+     轨道 10px，滑块两侧各留 2px 透明确实边界 → 视觉可见 6px，与模型面板粗细一致。
+     ⚠ 此处禁止写 scrollbar-width / scrollbar-color：标准属性一旦出现，下面整段
+       ::-webkit-scrollbar 会失效（实测退回 10px 方块滑块）。Firefox 走 @supports 隔离。 */
+  .chat-flow { scrollbar-gutter: stable; }  /* 常驻占位：流式输出撑出滚动条时内容不再横向跳动 */
+  .chat-flow::-webkit-scrollbar { width: 10px; }
+  .chat-flow::-webkit-scrollbar-track { background: transparent; }
+  .chat-flow::-webkit-scrollbar-thumb {
+    background-color: rgba(128,128,128,.32);
+    border: 2px solid transparent;   /* 内缩：靠透明确实边界撑出 2px 呼吸，不是 padding */
+    background-clip: content-box;
+    border-radius: 999px;            /* 内缩会吃掉圆角（10px 宽写 3px 只剩 1px），故给超大值让它自己夹到 3px */
+  }
+  .chat-flow::-webkit-scrollbar-thumb:hover {
+    /* 用 background-color 而非 background 简写：简写会把 background-clip 重置成 border-box，
+       hover 时滑块会从 6px 突然胀成 10px */
+    background-color: rgba(128,128,128,.55);
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    /* 仅 Firefox 命中；Chrome 里 selector(::-webkit-scrollbar) 为 true，此段不生效 */
+    .chat-flow { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; }
+  }
+
   .chat-empty {
     color: var(--text-4); font-size: 14px; text-align: center; padding: 60px 20px; line-height: 1.8;
   }
