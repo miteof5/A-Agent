@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "代理候选清单模板。复制为 proxy_config.json 后填写本机真实路径（proxy_config.json 已被 .gitignore 排除，不会提交）。",
+    "exe 路径不存在时自动跳过该候选（不报错、不拉起），所以留空 = 只用已在运行的代理。",
+    "端口按你本地代理软件的实际设置改；这是给 agent 自动拉起/探测用的，不改也不影响手动开代理。"
+  ],
+  "proxies": [
+    {
+      "name": "clash",
+      "type": "http",
+      "host": "127.0.0.1",
+      "port": 7890,
+      "exe": "C:\\Program Files\\Clash for Windows\\Clash for Windows.exe"
+    },
+    {
+      "name": "v2rayN",
+      "type": "socks5",
+      "host": "127.0.0.1",
+      "port": 10808,
+      "exe": "C:\\Program Files\\v2rayN\\v2rayN.exe"
+    }
+  ],
+  "startup_wait_sec": 15
+}

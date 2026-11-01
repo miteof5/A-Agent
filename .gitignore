@@ -17,3 +17,9 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
+
+# 能力探测结果（运行时自愈写入，机器相关）
+capabilities.probe.json
+
+# 本机代理路径（暴露装了哪个客户端/哪个机场的包，机器相关）；仓库里只放 .example 模板
+proxy_config.json

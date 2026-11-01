@@ -9,7 +9,9 @@
   每次启动本质会弹出代理工具 GUI，用户习惯手动关闭；agent 只负责拉起，不负责关。
   注意：被用户手动关闭后，_launched 里的死 pid 记录会被 _prune_dead/_launch_if_needed
   清理并重新拉起，联网不会因此静默失效。
-- 敏感信息：本模块只有端口/路径（无 key），proxy_config.json 可提交 git。
+- 敏感信息：本模块零 key。但 `exe` 是本机路径（会暴露装了哪个代理客户端/哪个机场的包），
+  所以 **proxy_config.json 不入库**（.gitignore 已排除），仓库里只放
+  `proxy_config.example.json` 模板；内置默认同样用通用安装路径，路径不存在就跳过拉起。
 """
 
 from __future__ import annotations
@@ -32,14 +34,14 @@ _DEFAULT_CONFIG = {
             "type": "http",
             "host": "127.0.0.1",
             "port": 7890,
-            "exe": r"C:\MyApp\Clash.for.Windows-0.20.16-ikuuu\Clash for Windows.exe",
+            "exe": r"C:\Program Files\Clash for Windows\Clash for Windows.exe",
         },
         {
             "name": "v2rayN",
             "type": "socks5",
             "host": "127.0.0.1",
             "port": 10808,
-            "exe": r"C:\MyApp\v2rayN\v2rayN.exe",
+            "exe": r"C:\Program Files\v2rayN\v2rayN.exe",
         },
     ],
     "startup_wait_sec": 15,
@@ -139,7 +141,11 @@ class ProxyManager:
 
 
 def _load_config(config_path: str | None = None) -> dict:
-    """读项目根 proxy_config.json（可提交，无敏感信息）；缺失/非法 → 内置默认。"""
+    """读项目根 proxy_config.json（本机私有文件，已 gitignore）；缺失/非法 → 内置默认。
+
+    仓库里只有 proxy_config.example.json 模板。没建这个文件也能跑：内置默认的 exe
+    是通用安装路径，`Path(exe).exists()` 不成立就跳过拉起，只用已在运行的代理。
+    """
     p = Path(config_path) if config_path else Path(__file__).resolve().parent.parent / "proxy_config.json"
     if p.exists():
         try:
