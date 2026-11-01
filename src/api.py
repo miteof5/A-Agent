@@ -318,7 +318,7 @@ def create_app(config: Config | None = None, llm=None) -> FastAPI:
         name = payload.name.strip()
         if name not in flatten(models_groups):
             raise HTTPException(status_code=400, detail={"code": "MODEL_NOT_IN_LIST", "message": f"模型不在清单中: {name}"})
-        ok, reason = llm.verify_model(name)  # 切换前先试水（1-token），防切到不可用模型
+        ok, reason = llm.verify_model(name)  # 切换前先试水（S6.2：口径=真实调用，带 tools+temperature）
         if not ok:
             # 校验失败 → 自动回滚（当前模型不变），返回具体原因
             raise HTTPException(status_code=400, detail={"code": "MODEL_VERIFY_FAILED", "message": reason})
@@ -344,9 +344,28 @@ async def _sse_generator(task_id: str, task, run: TaskRun | None, storage: Stora
     if replay:
         events = storage.list_events(task_id)
         if events:
+            # S6.2：新任务有 step_end（一次调用一条，含 content+reasoning+kind），
+            # 它是 thought 的超集——两者都重放会导致同一段文字出现两次，故二选一。
+            has_step_end = any(ev["type"] == "agent/step_end" for ev in events)
             for ev in events:
                 p = ev["payload"]
-                if ev["type"] == "agent/thought":
+                if ev["type"] == "agent/step_end":
+                    yield _sse(
+                        None,
+                        "step_end",
+                        {
+                            "turn": p.get("turn", 0),
+                            "step": p.get("step", 0),
+                            "kind": p.get("kind", "answer"),
+                            "content": p.get("content", ""),
+                            "reasoning": p.get("reasoning", ""),
+                            "model": p.get("model", ""),
+                            "task_id": task_id,
+                        },
+                    )
+                elif ev["type"] == "agent/thought":
+                    if has_step_end:
+                        continue  # 已被 step_end 覆盖（旧任务没有 step_end，走下面这条）
                     yield _sse(None, "thought", {"turn": p.get("turn", 0), "step": p.get("step", 0), "text": p.get("text", ""), "task_id": task_id})
                 elif ev["type"] == "tools/call":
                     yield _sse(None, "tool_call", {"turn": p.get("turn", 0), "step": p.get("step", 0), "name": p.get("name", ""), "arguments": p.get("arguments"), "task_id": task_id})
@@ -358,7 +377,8 @@ async def _sse_generator(task_id: str, task, run: TaskRun | None, storage: Stora
                             "turn": p.get("turn", 0),
                             "step": p.get("step", 0),
                             "ok": p.get("ok"),
-                            "content_summary": (p.get("content") or "")[:500],
+                            "content_summary": (p.get("content") or p.get("error") or "")[:500],
+                            "error": p.get("error"),
                             "is_denied": p.get("is_denied", False),
                             "task_id": task_id,
                         },
@@ -393,7 +413,8 @@ async def _sse_generator(task_id: str, task, run: TaskRun | None, storage: Stora
                             "turn": s["turn_index"],
                             "step": s["step_index"],
                             "ok": tr.get("ok"),
-                            "content_summary": (tr.get("content") or "")[:500],
+                            "content_summary": (tr.get("content") or tr.get("error") or "")[:500],
+                            "error": tr.get("error"),
                             "is_denied": tr.get("is_denied", False),
                             "task_id": task_id,
                         },

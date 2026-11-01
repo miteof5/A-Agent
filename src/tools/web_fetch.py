@@ -8,7 +8,7 @@
 - 网络链路复用 ProxyManager（Clash 优先 → v2rayN 兜底），瞬态错误 failover 重试一次。
 - 输出有界：响应体限 2MB、交小模型前正文截 50K 字符、最终返回 ≤ max_chars + 元信息。
 - 权限：只读无副作用 → 两档均放行（permissions.py 增加分支）。
-- 敏感信息：本工具零 key；代理配置走 proxy_config.json（可提交）。
+- 敏感信息：本工具零 key；代理配置走 proxy_config.json（本机私有文件，已 gitignore）。
 """
 
 from __future__ import annotations
@@ -167,8 +167,22 @@ class WebFetchTool(BaseTool):
             return ToolResult(ok=True, content=head + f"正文（截断，原文 {len(body)} 字）：\n{body_cut[:max_chars]}…")
         try:
             summary, _usage = self.llm.compress_text(body_cut, purpose="网页正文", max_chars=max_chars)
-        except Exception as e:  # noqa: BLE001 - 压缩失败不应让主任务崩溃
-            return ToolResult(ok=False, content="", error=f"正文压缩失败：{e}")
+        except Exception as e:  # noqa: BLE001 - 压缩失败不应让主任务崩溃，更不应丢掉已抓到的正文
+            # 2026-10-31：原先这里返回 ok=False + content=""，把已经抓下来的正文整体丢弃。
+            # 实测该分支的主要触发原因是压缩用小模型额度耗尽（403 Free quota exhausted），
+            # 于是"摘要服务不可用"被误报成"网页抓取失败"，模型只看到空结果、无从判断。
+            # 现在按注释本来的意图降级：返回有界原文节选，ok=True，并注明摘要失败。
+            logger.warning("web_fetch 正文压缩失败，降级为原文节选 url=%s err=%s", url, e)
+            return ToolResult(
+                ok=True,
+                content=(
+                    head
+                    + f"正文（摘要失败，已降级为原文节选；原文 {len(body)} 字，此处 {max_chars} 字）：\n"
+                    + body_cut[:max_chars]
+                    + "…"
+                ),
+                metadata={"compress_failed": True, "body_chars": len(body)},
+            )
         return ToolResult(ok=True, content=head + f"（原文 {len(body)} 字，已压缩为 {max_chars} 字内摘要）\n摘要：\n{summary}")
 
 

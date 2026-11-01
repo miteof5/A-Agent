@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -55,6 +56,34 @@ class ToolResult:
             "is_denied": self.is_denied,
             "metadata": self.metadata,
         }
+
+
+def tool_message_content(
+    ok: bool,
+    content: str | None = None,
+    error: str | None = None,
+    is_denied: bool = False,
+    metadata: dict | None = None,
+) -> str:
+    """喂给 LLM 的 tool 消息体（唯一出口）。
+
+    实时循环与历史重建必须走同一个函数：此前实时用 ToolResult.to_dict()、重建手拼
+    {ok, content, is_denied}，导致同一任务"实时看到的"与"重新打开的"历史不一致——
+    实时有 error/metadata，重建全丢，失败的工具在续聊上下文里变成"空结果无原因"。
+
+    固定输出五个键（缺值补 null / {}），保证新旧任务的消息形状一致；历史事件没有
+    error/metadata 时自然退化为 null / {}，不需要迁移。
+    """
+    return json.dumps(
+        {
+            "ok": ok,
+            "content": content or "",
+            "error": error,
+            "is_denied": bool(is_denied),
+            "metadata": metadata or {},
+        },
+        ensure_ascii=False,
+    )
 
 
 @dataclass

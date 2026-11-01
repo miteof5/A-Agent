@@ -46,7 +46,7 @@ class FakeLLM:
 
         return LLMCall(text="ok")
 
-    def chat_stream(self, messages, tools=None, on_delta=None, should_stop=None):
+    def chat_stream(self, messages, tools=None, on_delta=None, should_stop=None, on_reasoning_delta=None):
         from src.llm_client import LLMCall
 
         return LLMCall(text="ok")

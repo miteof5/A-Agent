@@ -143,6 +143,10 @@
   }
   /* Agent 回答的 Markdown 渲染样式（marked.js 输出，DOMPurify 已清洗） */
   .msg-agent .md-body { font-size: 14px; line-height: 1.7; word-break: break-word; }
+  /* S6.1：流式期间是纯文本（未走 markdown），需保留换行与空格 */
+  .msg-agent.live .md-body { white-space: pre-wrap; word-break: break-word; }
+  /* S6.2：思维链比 narration 退后一层（同属过程，但它是模型的内部推理，不是对你说的） */
+  .block .text.rsn { color: var(--text-3); }
   .msg-agent .md-body > :first-child { margin-top: 0; }
   .msg-agent .md-body > :last-child { margin-bottom: 0; }
   .msg-agent .md-body p { margin: 0.5em 0; }
@@ -586,7 +590,7 @@ const stream = {
     this.close();
     const es = new EventSource('/api/v1/task/stream?task_id=' + encodeURIComponent(taskId) + '&replay=' + (replay ? 'true' : 'false'));
     this.es = es;
-    const types = ['status','user','thought','token','tool_call','tool_result','ask','done','error','token_usage','memory_compressed'];  // 2026-09-26：+user（重放渲染用户消息）；09-30：+token_usage/memory_compressed
+    const types = ['status','user','thought','content_delta','reasoning_delta','step_end','token','tool_call','tool_result','ask','done','error','token_usage','memory_compressed'];  // 2026-11-01：+content_delta/reasoning_delta/step_end（S6.2 通道分离）
     for (const t of types) es.addEventListener(t, (e) => { try { onEvent(e); } catch (err) { showToast('渲染出错：' + err.message, 'error'); } });
     es.onerror = () => { if (this.es !== es) return; this.close(); onError(); };
   },
@@ -600,9 +604,12 @@ const state = {
   sessList: [],
   pollTimer: null,
   lastToolBlock: null,     // 最近 tool_call 块（tool_result 追加）
-  lastThoughtBlock: null,  // 最近流式思考块
+  lastThoughtBlock: null,  // 最近过程块（仅重放路径用；实时路径已改走 liveBlock）
   lastThoughtStep: null,   // 思考去重键（旧单步号，保留兼容）
   lastThoughtKey: null,    // S4.3：turn-step 组合去重键（多轮对话区分轮次）
+  liveBlock: null,         // S6.1：当前流式块 {key, el, body, turn, step, text, demoted}
+  reasoningBlocks: {},     // S6.2：思维链条块 {key: el}（按 turn-step 定位，deltas 累加）
+  userTurns: new Set(),    // 2026-11-01：已画过用户气泡的轮次（乐观插入 vs 重放去重）
   isReplaying: true,        // S4.5：历史重放中（重放默认收起过程块；实时执行自动展开）
   curState: null,          // 当前会话状态（done 会话可续聊 / executing 拒并发）
   uiGen: 0                 // UI 代际：reset/openSession/runTask 时 +1，丢弃迟到的轮询/SSE 响应
@@ -876,10 +883,103 @@ function addProcBlock(html, cls, turn) {
 function scrollBottom() {
   el.chatFlow.scrollTop = el.chatFlow.scrollHeight;
 }
-function addUserMsg(text) {
+/* ---- S6.1：一个文本块一个引用（思考与答案分离 P1） ----
+   一次 LLM 调用的 narration 从创建起就只有一块，靠 turn-step 定位，不靠"猜是不是同一条"：
+     流式期间   → 停在对话流顶层（答案位，位置不动）
+     带 tool_call 的 step 结束 → 移入过程区，定级为"过程"（整体只移动一次）
+     无 tool_call 的 step 结束 → 就地升级为答案（零移动，不再重复渲染）
+   done 只负责收尾与兜底，不再无条件 addAgentResult。 */
+function streamKey(turn, step) {
+  return ((turn === undefined || turn === null) ? 0 : turn) + '-' + step;
+}
+function ensureLiveBlock(turn, step) {
+  const key = streamKey(turn, step);
+  let b = state.liveBlock;
+  if (b && b.key === key) return b;
+  if (b && !b.demoted) demoteLiveBlock(b);  // 异常路径：上一块没等到定级信号
+  const div = document.createElement('div');
+  div.className = 'msg-agent live';
+  div.innerHTML = '<b style="color:#4d6bfe;">Agent</b>';
+  const body = document.createElement('div');
+  body.className = 'md-body';
+  div.appendChild(body);
+  el.chatFlow.appendChild(div);
+  b = { key: key, el: div, body: body, turn: turn, step: step, text: '', demoted: false };
+  state.liveBlock = b;
+  scrollBottom();
+  return b;
+}
+function demoteLiveBlock(b) {
+  if (!b || b.demoted) return;
+  b.demoted = true;
+  const procBody = ensureProcBox(b.turn);
+  b.el.className = 'block';
+  b.el.innerHTML = '<div class="tag">💭 思考（第 ' + (((b.step || 0)) + 1) + ' 步）</div>';
+  const t = document.createElement('div');
+  t.className = 'text';
+  t.textContent = b.text;
+  b.el.appendChild(t);
+  procBody.appendChild(b.el);
+  if (state.liveBlock === b) state.liveBlock = null;
+  scrollBottom();
+}
+function finalizeLiveBlock(b, fullText) {
+  if (!b || b.demoted) return false;
+  const text = (fullText && String(fullText).trim()) ? fullText : b.text;
+  b.el.className = 'msg-agent';
+  b.el.innerHTML = '<b style="color:#4d6bfe;">Agent</b>';
+  const body = document.createElement('div');
+  body.className = 'md-body';
+  body.innerHTML = renderMarkdown(text || '（无返回内容）');
+  b.el.appendChild(body);
+  if (state.liveBlock === b) state.liveBlock = null;
+  scrollBottom();
+  return true;
+}
+/* S6.2：思维链块（真 reasoning，独立于 narration）。按 turn-step 定位，deltas 累加 */
+function ensureReasoningBlock(turn, step, text) {
+  const key = streamKey(turn, step);
+  let b = state.reasoningBlocks[key];
+  if (b) return b;
+  b = addProcBlock(
+    '<div class="tag">🧠 思维链（第 ' + (((step || 0)) + 1) + ' 步）</div>' +
+    '<div class="text rsn"></div>',
+    '', turn
+  );
+  const t = b.querySelector('.text');
+  if (t) t.textContent = text || '';
+  state.reasoningBlocks[key] = b;
+  return b;
+}
+/* 重放路径没有 token 事件，过程区里可能残留与最终答案同文的块——只删最后一块且仅在完全同文时删 */
+function stripDupFromProc(fullText) {
+  const want = String(fullText || '').trim();
+  if (!want) return;
+  el.chatFlow.querySelectorAll('.proc-body').forEach(function (body) {
+    const blocks = body.querySelectorAll('.block');
+    if (!blocks.length) return;
+    const last = blocks[blocks.length - 1];
+    const t = last.querySelector('.text');
+    if (t && t.textContent.trim() === want) {
+      last.remove();
+      state.lastThoughtBlock = null;
+      state.lastThoughtKey = null;
+    }
+  });
+}
+/* 用户气泡。turn 是这一轮的唯一身份，用于"本地乐观插入"与"服务端重放"二选一。
+   2026-11-01 修复：首次发送时 runTask 先本地画一条，随后 SSE replay 又把已落库的
+   agent/user 重放一遍 → 同一句话上下两条；切换会话只走重放，所以重进就正常了。 */
+function addUserMsg(text, turn) {
+  const t = (turn === undefined || turn === null || turn === '') ? null : Number(turn);
+  if (t !== null && !Number.isNaN(t)) {
+    if (state.userTurns.has(t)) return;  // 该轮已画过（乐观插入优先），重放不再重复
+    state.userTurns.add(t);
+  }
   const div = document.createElement('div');
   div.className = 'msg-user';
   div.textContent = text;
+  if (t !== null && !Number.isNaN(t)) div.setAttribute('data-turn', t);
   el.chatFlow.appendChild(div);
   scrollBottom();
 }
@@ -911,8 +1011,17 @@ function addAgentError(message) {
   el.chatFlow.appendChild(div);
   scrollBottom();
 }
+/* 清空对话流 + 重置所有指向 DOM 的引用。
+   实职是那几行 state 重置（流式块、思维链块、最后一轮思考块、用户气泡去重键），
+   不是画提示文字——msg 为空时什么都不画（2026-11-01：去掉"加载会话历史…/正在执行…"
+   这类过程性占位，状态已由顶部 pill 与发送按钮承载）。 */
 function emptyChat(msg) {
-  el.chatFlow.innerHTML = '<div class="chat-empty">' + msg + '</div>';
+  state.liveBlock = null;      // S6.1：DOM 清空，流式块引用必须同步失效
+  state.reasoningBlocks = {};   // S6.2：同上
+  state.userTurns = new Set();  // 2026-11-01：DOM 清空后用户气泡去重键也要归零
+  state.lastThoughtBlock = null;
+  state.lastThoughtKey = null;
+  el.chatFlow.innerHTML = msg ? '<div class="chat-empty">' + msg + '</div>' : '';
 }
 
 /* ---- 工具块 + 日志面板（查看原始输出） ---- */
@@ -1069,17 +1178,27 @@ function onEvent(ev) {
       break;
     case 'user':
       // 2026-09-26：切换会话重放时渲染用户消息（此前 agent/user 不重放导致提问丢失）
-      addUserMsg(d.content);
+      // 2026-11-01：带 turn 去重——首轮发送时本地已乐观插入，重放不再重复画一条
+      addUserMsg(d.content, d.turn);
       break;
     case 'thought': {
-      const key = (d.turn !== undefined ? d.turn : 0) + '-' + d.step;
+      const key = streamKey(d.turn, d.step);
+      const live = state.liveBlock;
+      if (live && live.key === key) {
+        // 实时路径：同一次调用的全文回执，覆盖流式文本即可 —— 不新建块、不定级、不移动
+        live.text = d.text || '';
+        if (!live.demoted) live.body.textContent = live.text;
+        else { const t = live.el.querySelector('.text'); if (t) t.textContent = live.text; }
+        break;
+      }
+      // 重放路径：历史里没有 token，thought 就是该 step 的正文（先按过程块展示，done 时再清重复）
       if (state.lastThoughtBlock && state.lastThoughtKey === key) {
         const t = state.lastThoughtBlock.querySelector('.text');
         if (t) t.textContent = d.text;
         state.lastThoughtKey = null;
       } else {
         state.lastThoughtBlock = addProcBlock(
-          '<div class="tag">💭 思考（第 ' + (d.step + 1) + ' 步）</div>' +
+          '<div class="tag">💭 思考（第 ' + (((d.step || 0)) + 1) + ' 步）</div>' +
           '<div class="text">' + escapeHtml(d.text) + '</div>',
           '', d.turn
         );
@@ -1088,28 +1207,58 @@ function onEvent(ev) {
       if (!state.isReplaying) setProcOpen(d.turn, true);  // 实时执行：当前轮自动展开
       break;
     }
-    case 'token': {
-      const key = (d.turn !== undefined ? d.turn : 0) + '-' + d.step;
-      const textEl = (state.lastThoughtBlock && state.lastThoughtKey === key)
-        ? state.lastThoughtBlock.querySelector('.text') : null;
-      if (textEl) {
-        textEl.textContent += d.delta;
-      } else {
-        state.lastThoughtKey = key;
-        state.lastThoughtBlock = addProcBlock(
-          '<div class="tag">💭 思考（第 ' + (d.step + 1) + ' 步）</div>' +
-          '<div class="text">' + escapeHtml(d.delta) + '</div>',
-          '', d.turn
-        );
-      }
+    case 'reasoning_delta': {
+      // S6.2：真思维链（模型内部推理），与 content 是两条独立通道，只进过程区
+      const b = ensureReasoningBlock(d.turn, d.step, '');
+      const t = b.querySelector('.text');
+      if (t) t.textContent += d.delta;
       if (!state.isReplaying) setProcOpen(d.turn, true);
       scrollBottom();
       break;
     }
-    case 'tool_call':
+    case 'step_end': {
+      // S6.2：一次 LLM 调用的收尾（kind 由后端判定，前端不再猜）
+      const key = streamKey(d.turn, d.step);
+      if (d.reasoning) {
+        const b = ensureReasoningBlock(d.turn, d.step, '');
+        const t = b.querySelector('.text');
+        if (t && t.textContent.length < d.reasoning.length) t.textContent = d.reasoning;
+      }
+      if (d.kind === 'process') {
+        const live = state.liveBlock;
+        if (live && live.key === key && !live.demoted) {
+          demoteLiveBlock(live);   // 实时：把这一步的 narration 收进过程区
+        } else if (state.isReplaying && d.content) {
+          // 重放：没有 token，用 step_end 重建过程块（对应旧的 thought）
+          addProcBlock(
+            '<div class="tag">💭 思考（第 ' + (((d.step || 0)) + 1) + ' 步）</div>' +
+            '<div class="text">' + escapeHtml(d.content) + '</div>',
+            '', d.turn
+          );
+        }
+      }
+      break;
+    }
+    case 'content_delta':  // S6.2：新事件名（模型说的话）
+    case 'token': {        // 兼容旧事件名（后端 P2 起不再发送）
+      const b = ensureLiveBlock(d.turn, d.step);
+      b.text += d.delta;
+      b.body.textContent = b.text;   // 流式期间纯文本（一次 markdown 重排留到定级时）
+      scrollBottom();
+      break;
+    }
+    case 'tool_call': {
+      // 这一 step 的 narration 说完了，要去调工具 → 定级为"过程"，收进过程区
+      const b = state.liveBlock;
+      if (b && !b.demoted
+          && ((d.turn === undefined || d.turn === null ? 0 : d.turn) === (b.turn === undefined || b.turn === null ? 0 : b.turn))
+          && (d.step === undefined || d.step >= b.step)) {
+        demoteLiveBlock(b);
+      }
       addToolCall(d.turn, d.step, d.name, d.arguments);
       if (!state.isReplaying) setProcOpen(d.turn, true);
       break;
+    }
     case 'tool_result':
       addToolResult(d.turn, d.step, d);
       break;
@@ -1117,10 +1266,18 @@ function onEvent(ev) {
       if (d.type === 'approval') addApprovalCard(d.question);
       else addAskCard(d.question);
       break;
-    case 'done':
-      addAgentResult(d.result);
+    case 'done': {
+      // 只收尾：有答案块就地升级，没有才兜底渲染（重放路径 / 中断任务）
+      const b = state.liveBlock;
+      const rendered = (b && !b.demoted) ? finalizeLiveBlock(b, d.result) : false;
+      if (!rendered) {
+        stripDupFromProc(d.result);
+        addAgentResult(d.result);
+      }
+      state.liveBlock = null;
       if (!state.isReplaying) onFinished('done');  // 2026-09-26：重放期间只逐轮渲染，收尾由终态 status(done) 负责
       break;
+    }
     case 'error':
       addAgentError(d.message);
       onFinished('error');
@@ -1143,6 +1300,13 @@ function onFinished(flag) {
   stopPolling();
   stream.close();
   state.isReplaying = false;
+  // S6.1：残留的流式块必须定格——完成/中断时就地升级为答案，停止/失败时收进过程区（半句话不算答案）
+  const live = state.liveBlock;
+  if (live && !live.demoted) {
+    if (flag === 'done') finalizeLiveBlock(live, live.text);
+    else demoteLiveBlock(live);
+  }
+  state.liveBlock = null;
   state.lastThoughtBlock = null;   // 2026-09-26：收尾清理流式块引用，防跨轮复用（配合后端 token turn 修复）
   state.lastThoughtKey = null;
   collapseAllProc();  // S4.5：任务完成/停止 → 过程块全部收起，只留最终回答
@@ -1195,7 +1359,7 @@ async function openSession(taskId, content, sandboxMode, stateName) {
   highlightSess(taskId);
   tokTotal = 0; tokLast = 0;   // 2026-09-30：打开历史会话先清零，由重放 token_usage 重新累计
   el.tokenBadge.textContent = 'Σ 0 · ↑ 0';
-  emptyChat('加载会话历史…');
+  emptyChat();   // 清 DOM 与流式块引用；不放"加载会话历史…"这类占位文案（重放通常瞬间完成）
   setPill('pending');
   el.sendBtn.disabled = true;
   el.stopBtn.style.display = '';
@@ -1238,8 +1402,8 @@ async function runTask() {
   el.sendBtn.textContent = '执行中…';
   const mode = el.modeSelect.value;
 
-  // 立即在会话列表顶部插入"执行中"占位（真实 task_id 返回后替换）
-  emptyChat('正在提交任务…');
+  // 立即清空对话区（新建的会话本该是空的）；真实 task_id 返回后画用户气泡
+  emptyChat();
   setPill('pending');
   try {
     const data = await api.createTask(content, mode);
@@ -1252,8 +1416,9 @@ async function runTask() {
     el.modeSelect.value = state.curTaskMode;
     el.stopBtn.style.display = '';
     el.stopBtn.disabled = false;
-    emptyChat('正在执行…');
-    addUserMsg(content);
+    // 2026-11-01：新任务轮次恒为 0（create_task 建表 turn=0，reactor start_turn=0）。
+    // 带上 turn 才能让随后的 SSE 重放（replay=true）认出"这条我已经画过了"。
+    addUserMsg(content, data.turn == null ? 0 : data.turn);
     setPill(data.state || 'pending');
     startPolling();
     stream.connect(data.task_id, {
@@ -1287,7 +1452,7 @@ async function continueChat(taskId, content) {
     state.curTaskContent = content;
     state.curState = 'executing';
     el.chatTitle.textContent = truncate(content, 40);
-    addUserMsg(content);
+    addUserMsg(content, r.data.turn);   // 2026-11-01：带 turn，防将来开 replay 时又撞车
     startPolling();
     stream.connect(taskId, {
       onEvent: onEvent,
@@ -1295,8 +1460,7 @@ async function continueChat(taskId, content) {
         showToast('实时连接断开，已切换为状态轮询（界面不会卡住）', 'warn');
         syncStatus();
       },
-      replay: false,  // 2026-09-26：续聊不重放历史（历史 DOM 已在），否则第一轮思考被重复渲染
-      replay: false
+      replay: false  // 2026-09-26：续聊不重放历史（历史 DOM 已在），否则第一轮思考被重复渲染
     });
     refreshSessList();
   } catch (e) {
@@ -1335,6 +1499,8 @@ function resetToNewChat() {
   state.curTaskId = null;
   state.lastToolBlock = state.lastThoughtBlock = null;
   state.lastThoughtStep = null;
+  state.liveBlock = null;
+  state.reasoningBlocks = {};
   el.chatTitle.textContent = '新会话';
   setPill('未开始');
   el.modeTag.textContent = '—';

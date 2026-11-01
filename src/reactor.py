@@ -4,7 +4,8 @@ S2.4 起 Reactor 是"瘦内核"，只负责主循环驱动（while + LLM + 工�
 所有横切逻辑（权限拦截、SSE 转发、结果压缩、日志等）通过 EventBus 事件点扩展：
 
     agent/status    emit      → 状态变化（SSE status）
-    agent/thought   emit      → 每 step 模型思考（SSE thought）
+    agent/reasoning_delta / agent/content_delta emit → 流式增量（真思维链 / 对用户说的话）
+    agent/step_end  emit      → 一次 LLM 调用结束（content + reasoning + model + kind，落库）
     tools/call      emit      → 工具调用意图（SSE tool_call）
     tools/pre-execute bail    → 权限审批/参数校验（PermissionPlugin；非 None 即拦截）
     tools/post-execute waterfall → 结果压缩/防死循环（可修改 ToolResult）
@@ -28,7 +29,7 @@ from .config import Config
 from .kernel.plugin import AgentContext
 from .llm_client import LLMCall
 from .long_memory import build_long_memory_block, extract_and_store
-from .models import StepResult, StepStatus, TaskState, ToolResult
+from .models import StepResult, StepStatus, TaskState, ToolResult, tool_message_content
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,48 @@ def _args_summary(arguments: dict, max_len: int = 160) -> str:
     """工具参数日志摘要（截断，避免长命令刷爆日志）。"""
     s = json.dumps(arguments or {}, ensure_ascii=False)
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
+
+
+def _capability_of(llm, config: Config):
+    """取当前模型的能力（假 LLM / 老实现没有 capability() 时返回 None）。"""
+    fn = getattr(llm, "capability", None)
+    if fn is None:
+        return None
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001 - 能力查询失败不该让主循环崩
+        logger.warning("能力表查询失败，按保守默认继续", exc_info=True)
+        return None
+
+
+def _assistant_message(call, cap) -> dict:
+    """把一次 LLM 调用拼成 assistant 消息（轮内回传的唯一出口）。
+
+    为什么必须回传（Spec §5.6 R1）：DeepSeek 思考模式 + tools 的规则是「本轮内必须
+    原样带回 reasoning_content」，漏了直接 400。而 OpenAI o 系列反向要求「绝不带」，
+    带了同样 400。所以带不带由能力表决定，不写死。
+
+    字段名用 `call.reasoning_field`（解析时命中的那个），不猜——网关用 `reasoning`
+    而这里是 `reasoning_content`，等于没带。
+    """
+    msg: dict = {"role": "assistant", "content": call.text}
+    if call.tool_calls:
+        msg["tool_calls"] = [
+            {
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                },
+            }
+            for tc in call.tool_calls
+        ]
+    reasoning = getattr(call, "reasoning", None)
+    if reasoning and cap is not None and getattr(cap, "echo_reasoning_with_tools", False):
+        field = getattr(call, "reasoning_field", None) or "reasoning_content"
+        msg[field] = reasoning
+    return msg
 
 
 class Reactor:
@@ -188,6 +231,7 @@ class Reactor:
             # 续聊：历史 messages 由调用方重建（已含本轮新 user 消息），这里直接续用
             messages = init_messages
         tool_specs = self._tool_specs()
+        cap = _capability_of(self.llm, self.config)  # S6.3：轮内回传的判定依据（每次运行解析一次）
         llm_calls = 0
 
         for step in range(self.config.max_steps_per_turn):
@@ -213,7 +257,10 @@ class Reactor:
                         messages,
                         tool_specs,
                         on_delta=lambda d: emit(
-                            "agent/token", {"turn": start_turn, "step": step, "delta": d}
+                            "agent/content_delta", {"turn": start_turn, "step": step, "delta": d}
+                        ),
+                        on_reasoning_delta=lambda d: emit(
+                            "agent/reasoning_delta", {"turn": start_turn, "step": step, "delta": d}
                         ),
                         should_stop=is_aborted,  # 2026-09-26：用户停止 → 流式中断（不再继续输出）
                     )
@@ -239,29 +286,35 @@ class Reactor:
                     "total": call.usage.get("total_tokens", 0),
                 })
 
-            if call.text:
-                emit("agent/thought", {"turn": start_turn, "step": step, "text": call.text})
+            # S6.3：agent/thought 停发。它和 step_end 装的是同一段 content，
+            # 双写只会让事件表存两份、读取侧还得二选一（Spec §8.2 遗留项 3）。
+            # 读取侧（rebuild/memory/api 重放）保留对旧任务的兼容分支。
+
+            # S6.2：一次 LLM 调用 = 一个 step_end（落库）。
+            # kind 由后端判定——它知道这次调用之后有没有 tool_calls，前端不必猜。
+            # 这也是 P3 重放与 rebuild 的唯一依据：展示看 reasoning，上下文看 content。
+            emit(
+                "agent/step_end",
+                {
+                    "turn": start_turn,
+                    "step": step,
+                    "model": getattr(self.llm, "model", "") or getattr(self.config, "llm_model", ""),
+                    "kind": "process" if call.tool_calls else "answer",
+                    "content": call.text or "",
+                    "reasoning": getattr(call, "reasoning", None) or "",
+                    "tool_calls": [
+                        {"id": tc["id"], "name": tc["name"], "arguments": tc["arguments"]}
+                        for tc in call.tool_calls
+                    ],
+                    "finish_reason": "tool_calls" if call.tool_calls else "stop",
+                },
+            )
 
             # ---- 2. 需要调用工具 ----
             if call.tool_calls:
                 # 先记录 assistant 的工具调用意图（OpenAI 多轮格式要求）
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": call.text,
-                        "tool_calls": [
-                            {
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": tc["name"],
-                                    "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-                                },
-                            }
-                            for tc in call.tool_calls
-                        ],
-                    }
-                )
+                # S6.3：统一走 _assistant_message——轮内回传 reasoning 的规则只在这里实现一次
+                messages.append(_assistant_message(call, cap))
                 for tc in call.tool_calls:
                     name = tc["name"]
                     arguments = tc["arguments"]
@@ -284,7 +337,9 @@ class Reactor:
                             "ok": result.ok,
                             "content_summary": _summary(result.content),
                             "content": result.content,  # S4.1：完整内容仅内核内部用（事件落库全量；SSE 转发瘦身为 summary）
+                            "error": result.error,  # 2026-10-31：失败原因必须落库，否则续聊上下文里只剩"空结果无原因"
                             "is_denied": result.is_denied,
+                            "metadata": result.metadata,  # 工具自述（file_view 的总行数/已显示行数等），重建时要还原
                             "tool_call_id": tc["id"],  # S4.3a：重建 tool 消息的配对键
                         },
                     )
@@ -311,7 +366,13 @@ class Reactor:
                         {
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": json.dumps(result.to_dict(), ensure_ascii=False),
+                            "content": tool_message_content(
+                                ok=result.ok,
+                                content=result.content,
+                                error=result.error,
+                                is_denied=result.is_denied,
+                                metadata=result.metadata,
+                            ),
                         }
                     )
                 self.storage.update_task(task_id, state=TaskState.EXECUTING, turn=start_turn, step=step + 1)
@@ -331,7 +392,11 @@ class Reactor:
             self.storage.update_task(
                 task_id, state=TaskState.DONE, turn=start_turn, step=step + 1, result=final
             )
-            emit("agent/done", {"result": final, "question": content})
+            # S6.3：done 必须带 turn/step。此前缺失导致两件事靠巧合成立：
+            # ① rebuild 的 min_turn 过滤把它当 NULL 滤掉（所以上下文里没重复）；
+            # ② memory 的逐轮 Q+A 只能靠 payload.question 兜底。
+            # 补上之后 rebuild 必须显式跳过「该 step 已有 step_end」的 done——见 rebuild.py。
+            emit("agent/done", {"result": final, "question": content, "turn": start_turn, "step": step})
             logger.info("任务完成 step=%d result=%r", step + 1, final[:100])
             # S5：长期记忆异步提炼（不阻塞主流程；失败只记日志，绝不影响任务结果）
             try:

@@ -4,7 +4,8 @@
 - SSERelay：内核事件 → SSE 转发（实时展示，payload 瘦身——tool_result 只发 summary）
 - 本插件：内核事件 → SQLite events 表（**全量 payload**——thought/tool_call 完整参数/
   tool_result 完整 content/ask 问答对/done/error/status；token_usage 落库供历史会话
-  重放累计消耗；agent/token 逐字流不落库——太碎且无重建价值）
+  重放累计消耗；agent/step_end 落库供重建上下文；逐字 delta（content/reasoning）不落库
+  ——太碎且无重建价值）
 
 落库后即获得"可重建"能力（S4.3 从 events 拼回 LLM 上下文继续执行），
 历史重放源也从 steps 升级为 events（SSE 侧见 api.py）。
@@ -21,6 +22,7 @@ _STORE_EVENTS = (
     "agent/user",    # S4.3a：每轮用户输入（重建多轮上下文的关键）
     "agent/status",
     "agent/thought",
+    "agent/step_end",  # S6.2：一次 LLM 调用的完整结果（content + reasoning + kind）——重建上下文的唯一依据
     "tools/call",
     "tools/result",
     "agent/ask",

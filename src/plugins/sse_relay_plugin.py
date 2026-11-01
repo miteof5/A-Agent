@@ -15,7 +15,10 @@ from ..kernel.plugin import AgentContext, BasePlugin
 # 内核事件 → SSE 事件名（契约 §4）
 _EVENT_MAP = {
     "agent/status": "status",
-    "agent/token": "token",  # S3.1：LLM 流式 token 逐字输出
+    "agent/content_delta": "content_delta",  # S6.2：模型对用户说的话（原 agent/token）
+    "agent/reasoning_delta": "reasoning_delta",  # S6.2：真思维链（独立通道，绝不并入 content）
+    "agent/step_end": "step_end",  # S6.2：一次 LLM 调用收尾（kind 由后端判定）
+    "agent/token": "token",  # 兼容旧事件名（P2 起不再发送，保留映射防漏网）
     "agent/thought": "thought",
     "tools/call": "tool_call",
     "tools/result": "tool_result",
@@ -59,7 +62,7 @@ class SSERelayPlugin(BasePlugin):
                 # S4.1：SSE 只发契约字段（content_summary ≤500），完整 content 走 events 表/日志接口
                 slim = {
                     k: data[k]
-                    for k in ("turn", "step", "ok", "content_summary", "is_denied", "task_id")
+                    for k in ("turn", "step", "ok", "content_summary", "error", "is_denied", "task_id")
                     if k in data
                 }
                 target(sse_event, slim)

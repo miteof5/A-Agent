@@ -87,19 +87,45 @@ def _qa_of_turn(events: list[dict], turn: int) -> tuple[str | None, str | None]:
 # ---- 第 3 层原料：把一批轮次的完整原文渲染成紧凑文本（喂给 LLM 总结）----
 
 def _render_turns(events: list[dict], turns: set[int]) -> str:
+    """把一批轮次的完整原文渲染成紧凑文本（喂给 LLM 总结）。
+
+    S6.3：新任务的"一次调用"记在 `agent/step_end` 里，`agent/thought` 已停止产生。
+    两者是超集关系（step_end = thought + reasoning + kind），所以有 step_end 时
+    一律不渲染 thought，否则同一段话会在摘要输入里出现两次。
+
+    reasoning 不参与压缩（Spec §8 D6）：摘要要的是"结论与证据"，
+    思维链既贵又容易被摘要成流水账；它只服务于当前轮内的继续推理。
+    """
     lines: list[str] = []
     cur: int | None = None
+    has_step_end = any(e["type"] == "agent/step_end" for e in events)
+    answered: set[int] = {
+        e["payload"].get("turn")
+        for e in events
+        if e["type"] == "agent/step_end"
+        and e["payload"].get("kind") == "answer"
+        and e["payload"].get("content")
+    }
     for e in events:
         p = e["payload"]
         turn = p.get("turn")
         if turn is None or e["type"] == SUMMARY_EVENT or turn not in turns:
             continue
+        t = e["type"]
+        if t == "agent/thought" and has_step_end:
+            continue
+        if t == "agent/done" and turn in answered:
+            continue  # 答案已由 step_end 的结论行给出，done 只带 result 副本
         if turn != cur:
             cur = turn
             lines.append(f"[第{turn + 1}轮]")
-        t = e["type"]
         if t == "agent/user":
             lines.append(f"  用户: {p.get('content') or ''}")
+        elif t == "agent/step_end":
+            text = (p.get("content") or "").strip()
+            if text:
+                label = "结论" if p.get("kind") == "answer" else "思考"
+                lines.append(f"  {label}: {text}")
         elif t == "agent/thought":
             lines.append(f"  思考: {p.get('text') or ''}")
         elif t == "tools/call":

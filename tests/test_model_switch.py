@@ -159,7 +159,7 @@ class FakeLLM:
     def chat(self, messages, tools=None):
         return LLMCall(text="ok")
 
-    def chat_stream(self, messages, tools=None, on_delta=None, should_stop=None):
+    def chat_stream(self, messages, tools=None, on_delta=None, should_stop=None, on_reasoning_delta=None):
         return LLMCall(text="ok")
 
 

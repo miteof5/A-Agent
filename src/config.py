@@ -93,6 +93,10 @@ class Config:
     repeat_soft_limit: int = 3  # S5.1：RepeatGuard 温和纠偏阈值
     repeat_hard_limit: int = 3  # S5.1：RepeatGuard 强硬终止阈值
     models_file: str = DEFAULT_MODELS_FILE  # 模型切换：可用模型清单文件
+    capabilities_file: str = "capabilities.json"  # S6.2：能力表（网关+模型 → 行为开关）
+    # S6.3：思考模式总开关。能力表决定「这个模型怎么开」，这里决定「这次任务开不开」。
+    # 两层是有意的：能力表是事实（谁支持什么参数），开关是策略（要不要付这份成本）。
+    thinking_enabled: bool = True
     memory_full_turns: int = 5  # 滚动记忆：完整上下文保留的最近轮数
     memory_summary_chunk: int = 10  # 滚动记忆：逐轮 Q+A 攒满多少条触发一次 LLM 总结
     memory_summary_chars: int = 400  # 滚动记忆：每条 LLM 摘要字数上限
@@ -118,6 +122,9 @@ def load_config() -> Config:
     api_key = os.getenv("AA_LLM_API_KEY", "") or os.getenv("DASHSCOPE_API_KEY", "")
     db_path = os.getenv("AA_DB_PATH", "actionagent.db")
     models_file = os.getenv("AA_MODELS_FILE", DEFAULT_MODELS_FILE)
+    capabilities_file = os.getenv("AA_CAPABILITIES_FILE", "capabilities.json")
+    # 默认开（用户选了 B），想省钱/省延迟时 AA_THINKING=0 一键关掉，不必改能力表
+    thinking_enabled = os.getenv("AA_THINKING", "1").strip().lower() not in ("0", "false", "no", "off")
 
     # 模型生效优先级：显式环境变量 > 上次切换持久化 > 代码默认值 > 清单第一个
     model = os.getenv("AA_LLM_MODEL", "").strip()
@@ -144,6 +151,8 @@ def load_config() -> Config:
         repeat_soft_limit=int(os.getenv("AA_REPEAT_SOFT_LIMIT", "3")),
         repeat_hard_limit=int(os.getenv("AA_REPEAT_HARD_LIMIT", "3")),
         models_file=models_file,
+        capabilities_file=capabilities_file,
+        thinking_enabled=thinking_enabled,
         memory_full_turns=int(os.getenv("AA_MEMORY_FULL_TURNS", "5")),
         memory_summary_chunk=int(os.getenv("AA_MEMORY_SUMMARY_CHUNK", "10")),
         memory_summary_chars=int(os.getenv("AA_MEMORY_SUMMARY_CHARS", "400")),
